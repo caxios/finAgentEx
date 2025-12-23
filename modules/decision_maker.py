@@ -1,7 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
-import base64
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,30 +11,23 @@ class TradingDecision(BaseModel):
     Confidence: float = Field(description="Confidence score between 0.0 and 1.0")
 
 model = ChatGoogleGenerativeAI(
-    model='gemini-2.5-flash',
+    model='gemini-pro-latest',
     temperature=0
 )
 
-def make_decision(ticker: str, news_summary: str, memories: list, reflections: str, chart_path: str):
+def make_decision(ticker: str, news_summary: str, memories: list, reflections: str, price_patterns: dict):
     """
     Synthesizes all multimodal inputs to make a trading decision.
     """
     print("Synthesizing data for final decision...")
-    
-    # 1. Prepare Image
-    with open(chart_path, "rb") as image_file:
-        image_data = base64.b64encode(image_file.read()).decode("utf-8")
         
     # 2. Prepare Memory Text
     memory_text = "\n".join([f"- {m}" for m in memories]) if memories else "No relevant memories found."
     
     # 3. Construct Prompt
-    # We send a multimodal message: Text + Image
+    # We send a text-only message now with structured price data
     message = HumanMessage(
-        content=[
-            {
-                "type": "text",
-                "text": f"""
+        content=f"""
 You are FinAgent, an autonomous trading AI. 
 Analyze the following data for {ticker} and make a trading decision.
 
@@ -48,18 +40,16 @@ Analyze the following data for {ticker} and make a trading decision.
 3. MEMORY (Similar Past Events):
 {memory_text}
 
-4. TECHNICAL VISUALS (Attached Chart):
-Reference the attached candlestick chart (OHLC). Analyze the trend, support/resistance, and volume.
+4. QUANTITATIVE ANALYSIS (Price Patterns):
+- Current Price: {price_patterns.get('current_price')}
+- Trend: {price_patterns.get('trend')} ({price_patterns.get('period_change_pct')}%)
+- Volatility: {price_patterns.get('volatility_score')}
+- Recent Pattern: {price_patterns.get('recent_pattern')}
+- History: {price_patterns.get('history_summary')}
 
-Based on ALL inputs (Text + Visual), decide on an action (BUY, SELL, or HOLD).
+Based on ALL inputs, decide on an action (BUY, SELL, or HOLD).
 Provide a structured JSON response.
 """
-            },
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{image_data}"}
-            }
-        ]
     )
     
     # 4. Invoke with Structured Output

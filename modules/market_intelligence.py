@@ -1,10 +1,6 @@
-import matplotlib
-matplotlib.use('Agg') # Force non-interactive backend
 import yfinance as yf
-import mplfinance as mpf
 import pandas as pd
 import os
-import uuid
 
 # Create charts directory if not exists
 os.makedirs("modules/charts", exist_ok=True)
@@ -19,24 +15,50 @@ def fetch_market_data(ticker: str):
     # Get 1 month of history for the chart
     hist = stock.history(period="1mo")
     
-    # Get news
-    news = stock.news
+    # News is now handled by the NewsAgent via Google Search Grounding
+    news = []
     
     return hist, news
 
-def generate_chart(ticker: str, data: pd.DataFrame):
+def analyze_price_patterns(hist: pd.DataFrame):
     """
-    Generates a candlestick chart and saves it. Returns the path.
+    Analyzes price data for patterns: volatility, trend, and recent moves.
+    Returns a dictionary of analysis results.
     """
-    print(f"Generating chart for {ticker}...")
-    filename = f"modules/charts/{ticker}_{uuid.uuid4()}.png"
+    print(f"Analyzing price patterns...")
     
-    # Customize style
-    mc = mpf.make_marketcolors(up='g', down='r', inherit=True)
-    s = mpf.make_mpf_style(marketcolors=mc)
+    # Calculate simple metrics
+    current_price = hist['Close'].iloc[-1] and hist['Close'].iloc[-1]
+    start_price = hist['Close'].iloc[0]
     
-    mpf.plot(data, type='candle', style=s, title=f"{ticker} Recent Price", savefig=filename)
-    return os.path.abspath(filename)
+    # Trend
+    price_change = current_price - start_price
+    pct_change = (price_change / start_price) * 100
+    trend = "Up" if price_change > 0 else "Down"
+    
+    # Volatility (Standard Deviation of daily returns)
+    daily_returns = hist['Close'].pct_change().dropna()
+    volatility = daily_returns.std() * 100 # as percentage
+    
+    # Recent Movement (Last 3 days)
+    last_3_days = hist['Close'].tail(3)
+    recent_trend_desc = "Consolidating"
+    if last_3_days.is_monotonic_increasing:
+        recent_trend_desc = "Strongly Rising"
+    elif last_3_days.is_monotonic_decreasing:
+        recent_trend_desc = "Strongly Falling"
+        
+    analysis = {
+        "current_price": round(current_price, 2),
+        "period_change_pct": round(pct_change, 2),
+        "trend": trend,
+        "volatility_score": round(volatility, 2), # Higher is more volatile
+        "recent_pattern": recent_trend_desc,
+        "history_summary": hist['Close'].tail(5).to_dict() # Give last 5 points for context
+    }
+    
+    print(f"--> Patterns Detected: {trend} ({pct_change}%), Volatility: {volatility:.2f}, Recent: {recent_trend_desc}")
+    return analysis
 
 def format_news(news: list):
     """
