@@ -1,42 +1,64 @@
 import argparse
 import sys
 import os
-import time
-from dotenv import load_dotenv
-
-load_dotenv()
+import json
 
 # Ensure we can import from modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from graph import graph
-from langchain_core.messages import HumanMessage
+# CORRECT IMPORTS from modules/
+from modules.market_intelligence import fetch_market_data, analyze_price_patterns
+from modules.memory import retrieve_similar_events, store_event
+from modules.reflection import low_level_reflection, high_level_reflection
+from modules.decision_maker import make_decision
 
 def run_finagent(ticker: str):
     print(f"=== Starting FinAgent for {ticker} ===\n")
-    print("--> Invoking Agent Graph (Price -> News -> Synthesis)...")
     
-    # Run the graph
-    # Note: This will trigger API calls. 
-    # Use 'invoke' to run to completion.
-    initial_state = {"messages": [HumanMessage(content=f"Analyze {ticker}")]}
-    result = graph.invoke(initial_state)
+    # Step 1: Fetch Data
+    # news_summary is now directly returned from Google Grounding
+    hist, news_summary = fetch_market_data(ticker)
+    print(f"--> Market Data Fetched. Latest Close: {hist['Close'].iloc[-1]:.2f}")
     
-    # Extract the final structured response
-    final_signal = result.get("final_signal")
+    # Step 1.5: Programmatic Price Analysis
+    patterns = analyze_price_patterns(hist)
     
-    if final_signal:
-        print("\n=== FINAL TRADING SIGNAL (Structured) ===")
-        print(final_signal.model_dump_json(indent=2))
-        print("=========================================\n")
-    elif result["messages"]:
-        # Fallback to text if structured failed
-        final_message = result["messages"][-1]
-        print("\n=== FINAL OUTPUT (Unstructured Fallback) ===")
-        print(final_message.content)
-        print("====================\n")
-    else:
-        print("No output from graph.")
+    # Step 2: [Skipped Visuals]
+    
+    # Step 3: Retrieve Memory
+    # we use the news summary as the query to find similar news events
+    memories = retrieve_similar_events(query=news_summary)
+    print(f"--> Retrieved {len(memories)} past similar events.")
+    
+    # Step 4: Reflect
+    # Low-level: Correlation
+    recent_trend = patterns['trend']
+    ll_reflection = low_level_reflection(news_summary, f"Price is {recent_trend}, Recent Pattern: {patterns['recent_pattern']}")
+    
+    # High-level: Strategy check (using retrieved memories as proxy for past decisions)
+    # Extract past actions from memories to reflect on
+    past_actions_text = [m for m in memories if "Action:" in m]
+    hl_reflection = high_level_reflection(past_actions_text)
+    
+    full_reflection = f"Low-Level: {ll_reflection}\nHigh-Level: {hl_reflection}"
+    print("--> Reflection Completed.")
+    
+    # Step 5: Decide
+    decision = make_decision(ticker, news_summary, memories, full_reflection, patterns)
+    
+    print("\n=== FINAL TRADING DECISION ===")
+    print(f"ACTION: {decision['Action']}")
+    print(f"CONFIDENCE: {decision['Confidence']}")
+    print(f"REASONING: {decision['Reasoning']}")
+    print("==============================\n")
+    
+    # Step 6: Store
+    store_event(
+        ticker=ticker,
+        summary=news_summary,
+        action=decision['Action'],
+        reasoning=decision['Reasoning']
+    )
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FinAgent Trading System")

@@ -18,7 +18,7 @@ model = ChatGoogleGenerativeAI(
 
 def make_decision(ticker: str, news_summary: str, memories: list, reflections: str, price_patterns: dict):
     """
-    Synthesizes all multimodal inputs to make a trading decision.
+    Synthesizes all text-based inputs to make a trading decision.
     """
     print("Synthesizing data for final decision...")
         

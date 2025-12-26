@@ -1,24 +1,53 @@
+from google import genai
+from google.genai import types
 import yfinance as yf
 import pandas as pd
 import os
+from dotenv import load_dotenv
 
-# Create charts directory if not exists
-os.makedirs("modules/charts", exist_ok=True)
+load_dotenv()
+
+# Initialize Google GenAI Client
+client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def fetch_market_data(ticker: str, period: str = "1mo"):
     """
-    Fetches OHLC data and recent news for the ticker.
+    Fetches OHLC data via yfinance and News via Google Search Grounding.
     """
     print(f"Fetching data for {ticker} ({period})...")
-    stock = yf.Ticker(ticker)
     
-    # Get history for the requested period
+    # 1. Get Price History (yfinance is still best for this)
+    stock = yf.Ticker(ticker)
     hist = stock.history(period=period)
     
-    # News is now handled by the NewsAgent via Google Search Grounding
-    news = []
+    # 2. Get News via Google Search Grounding
+    print(f"Searching news for {ticker} with Google Grounding...")
     
-    return hist, news
+    grounding_tool = types.Tool(
+        google_search=types.GoogleSearch()
+    )
+
+    grounding_config = types.GenerateContentConfig(
+        tools=[grounding_tool],
+        temperature=0.0 # Strict factual search
+    )
+    
+    prompt = f"""
+    Find the latest important financial news, quarterly earnings reports, and major events for {ticker} 
+    from the last 3 months. Summarize the key points that would affect the stock price.
+    Also mention if there are any upcoming earnings or fed decisions relevant to it.
+    """
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=grounding_config,
+    )
+    
+    # The response.text contains the grounded summary with citations
+    news_summary = response.text
+    
+    return hist, news_summary
 
 def analyze_price_patterns(hist: pd.DataFrame):
     """
@@ -28,7 +57,7 @@ def analyze_price_patterns(hist: pd.DataFrame):
     print(f"Analyzing price patterns...")
     
     # Calculate simple metrics
-    current_price = hist['Close'].iloc[-1] and hist['Close'].iloc[-1]
+    current_price = hist['Close'].iloc[-1]
     start_price = hist['Close'].iloc[0]
     
     # Trend
@@ -59,15 +88,3 @@ def analyze_price_patterns(hist: pd.DataFrame):
     
     print(f"--> Patterns Detected: {trend} ({pct_change}%), Volatility: {volatility:.2f}, Recent: {recent_trend_desc}")
     return analysis
-
-def format_news(news: list):
-    """
-    Formats the news list into a string summary.
-    """
-    summary = ""
-    for item in news[:5]: # Top 5 news
-        # Handle potential missing keys gracefully
-        title = item.get('title', item.get('content', {}).get('title', 'No Title'))
-        pub_time = item.get('providerPublishTime', 'N/A')
-        summary += f"- [{pub_time}] {title}\n"
-    return summary
