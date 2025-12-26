@@ -3,6 +3,7 @@ from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from ddgs import DDGS
+import os
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 
@@ -10,7 +11,7 @@ load_dotenv()
 
 # Initialize the model for testing
 model = ChatGoogleGenerativeAI(
-    model='gemini-pro-latest',
+    model=os.getenv('MODEL'),
     temperature=0
 )
 

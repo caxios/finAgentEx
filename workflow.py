@@ -22,10 +22,17 @@ def run_finagent(ticker: str):
     initial_state = {"messages": [HumanMessage(content=f"Analyze {ticker}")]}
     result = graph.invoke(initial_state)
     
-    # Extract the final response
-    if result["messages"]:
+    # Extract the final structured response
+    final_signal = result.get("final_signal")
+    
+    if final_signal:
+        print("\n=== FINAL TRADING SIGNAL (Structured) ===")
+        print(final_signal.model_dump_json(indent=2))
+        print("=========================================\n")
+    elif result["messages"]:
+        # Fallback to text if structured failed
         final_message = result["messages"][-1]
-        print("\n=== FINAL OUTPUT ===")
+        print("\n=== FINAL OUTPUT (Unstructured Fallback) ===")
         print(final_message.content)
         print("====================\n")
     else:

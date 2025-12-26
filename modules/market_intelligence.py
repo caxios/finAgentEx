@@ -5,15 +5,15 @@ import os
 # Create charts directory if not exists
 os.makedirs("modules/charts", exist_ok=True)
 
-def fetch_market_data(ticker: str):
+def fetch_market_data(ticker: str, period: str = "1mo"):
     """
     Fetches OHLC data and recent news for the ticker.
     """
-    print(f"Fetching data for {ticker}...")
+    print(f"Fetching data for {ticker} ({period})...")
     stock = yf.Ticker(ticker)
     
-    # Get 1 month of history for the chart
-    hist = stock.history(period="1mo")
+    # Get history for the requested period
+    hist = stock.history(period=period)
     
     # News is now handled by the NewsAgent via Google Search Grounding
     news = []

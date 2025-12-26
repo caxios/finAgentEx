@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
+import os
 load_dotenv()
 
 class TradingDecision(BaseModel):
@@ -11,7 +12,7 @@ class TradingDecision(BaseModel):
     Confidence: float = Field(description="Confidence score between 0.0 and 1.0")
 
 model = ChatGoogleGenerativeAI(
-    model='gemini-pro-latest',
+    model=os.getenv('MODEL'),
     temperature=0
 )
 

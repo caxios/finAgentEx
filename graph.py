@@ -1,10 +1,12 @@
-from typing import Annotated, TypedDict
+from typing import Annotated, TypedDict, Optional
 from langchain_core.messages import HumanMessage, BaseMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import create_react_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph.message import add_messages
 from agents import price_agent, news_agent, news_prompt
+from modules.models import PriceSignal, NewsSignal, TradingSignal
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,54 +14,85 @@ load_dotenv()
 # --- 1. Define State ---
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
+    price_signal: Optional[PriceSignal]
+    news_signal: Optional[NewsSignal]
+    final_signal: Optional[TradingSignal]
 
 model = ChatGoogleGenerativeAI(
-    model='gemini-pro-latest',
+    model=os.getenv('MODEL'),
     temperature=0
 )
 
 # --- 2. Nodes ---
 
 def call_price_agent(state: AgentState):
-    print("--> Calling Price Agent")
-    # We instruct the Price Agent to perform the analysis
-    response = price_agent.invoke({"messages": [HumanMessage(content="Perform a comprehensive price analysis for the requested ticker. Use the get_price_analysis tool.")]})
-    # We add a tag or prefix to identify this as price analysis if needed, but the content should be self-explanatory.
-    return {"messages": [response["messages"][-1]]}
+    print("--> Calling Price Agent (Structured)")
+    response = price_agent.invoke({"messages": [HumanMessage(content="Perform a comprehensive price analysis for the requested ticker, covering the last 1 year of data.")]})
+    
+    # Extract the text response
+    ai_msg = response["messages"][-1]
+    
+    # Structure it
+    print("    [Price Agent] Converting to Structured Output...")
+    structured_llm = model.with_structured_output(PriceSignal)
+    signal = structured_llm.invoke(f"Extract the following analysis into a structured signal:\n\n{ai_msg.content}")
+    
+    return {
+        "messages": [ai_msg], 
+        "price_signal": signal
+    }
 
 def call_news_agent(state: AgentState):
-    print("--> Calling News Agent")
-    # We instruct the News Agent to find signals
-    last_message = state['messages'][0]
+    print("--> Calling News Agent (Structured)")
+    # Pass context (Price Signal) to News Agent if useful, or just ensure continuity
+    last_message = state['messages'][0] # User query
+    
     # Inject system prompt
     messages = [SystemMessage(content=news_prompt), last_message]
     response = news_agent.invoke({"messages": messages})
-    return {"messages": [response["messages"][-1]]}
+    
+    ai_msg = response["messages"][-1]
+    
+    # Structure it
+    print("    [News Agent] Converting to Structured Output...")
+    structured_llm = model.with_structured_output(NewsSignal)
+    signal = structured_llm.invoke(f"Extract the following news analysis into a structured signal:\n\n{ai_msg.content}")
+    
+    return {
+        "messages": [ai_msg],
+        "news_signal": signal
+    }
 
 def synthesis_node(state: AgentState):
-    print("--> Calling Synthesis Node")
-    messages = state['messages']
+    print("--> Calling Synthesis Node (Structured)")
     
-    # We construct a prompt for the synthesis
-    synthesis_prompt = """You are a Financial Analyst.
-    Review the following Price Analysis and News Analysis.
+    price = state.get('price_signal')
+    news = state.get('news_signal')
     
-    Goal: Predict the next price movement interactively based on how news contextualizes recent price action.
-    Do NOT output an image. Output a structured text prediction.
+    if not price or not news:
+        return {"messages": [HumanMessage(content="Error: Missing signals for synthesis.")]}
+
+    synthesis_prompt = f"""You are a Financial Analyst.
+    Synthesize the following structured signals into a final trading decision.
     
-    Structure your response as:
-    1. MARKET CONTEXT: Synthesis of price and news.
-    2. PREDICTION: Up/Down/Sideways with confidence level.
-    3. RATIONALE: Why?
+    PRICE ANALYSIS:
+    Signal: {price.signal}
+    Trend: {price.trend}
+    Volatility: {price.volatility}
+    
+    NEWS ANALYSIS:
+    Signal: {news.signal}
+    Sentiment: {news.sentiment}
+    Summary: {news.summary}
+    
+    Goal: Predict the next price movement and provide a structured rationale.
     """
     
-    # We invoke the model directly for synthesis
-    synthesis_messages = [
-        {"role": "system", "content": synthesis_prompt}
-    ] + messages 
+    structured_llm = model.with_structured_output(TradingSignal)
+    final_signal = structured_llm.invoke(synthesis_prompt)
     
-    response = model.invoke(synthesis_messages)
-    return {"messages": [response]}
+    # Return the object in state
+    return {"final_signal": final_signal}
 
 # --- 3. Build the Graph ---
 builder = StateGraph(AgentState)
