@@ -1,16 +1,16 @@
 import argparse
 import sys
 import os
-import time
-from dotenv import load_dotenv
-
-load_dotenv()
+import json
 
 # Ensure we can import from modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from graph import graph
-from langchain_core.messages import HumanMessage
+# CORRECT IMPORTS from modules/
+from modules.market_intelligence import fetch_market_data, analyze_price_patterns
+from modules.memory import retrieve_similar_events, store_event
+from modules.reflection import low_level_reflection, high_level_reflection
+from modules.decision_maker import make_decision
 
 def run_finagent(ticker: str, query: str = None):
     print(f"=== Starting FinAgent for {ticker} ===\n")
