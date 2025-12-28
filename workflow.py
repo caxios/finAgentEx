@@ -11,6 +11,8 @@ from modules.market_intelligence import fetch_market_data, analyze_price_pattern
 from modules.memory import retrieve_similar_events, store_event
 from modules.reflection import low_level_reflection, high_level_reflection
 from modules.decision_maker import make_decision
+from langchain_core.messages import HumanMessage
+from graph import graph
 
 def run_finagent(ticker: str, query: str = None):
     print(f"=== Starting FinAgent for {ticker} ===\n")

@@ -51,10 +51,50 @@ price_agent = create_react_agent(
 )
 
 # --- News Agent ---
-# Legacy placeholder. Actual news intelligence is now handled by workflow.py via modules.market_intelligence (Google Grounding)
-# We keep this lightweight agent here in case the graph architecture needs it, but it has no tools.
-# It can only answer basica questions from its internal knowledge.
+# Responsible for qualitative data using Google Search Grounding
+news_prompt = """You are a News Agent. Your goal is to extract qualitative signals from news and official corporate announcements that might correlate with market movements.
+
+You have access to **Google Search**. Use it to find:
+1.  **Recent News**: "stock news financial analysis" for the ticker.
+2.  **Press Releases**: Official announcements from the company.
+
+**Workflow**:
+1.  **Search**: Use your search tool to find high-impact headlines (Earnings, Mergers, Regulatory shifts, New Products).
+2.  **Synthesize**: Combine insights from the search results.
+
+Look for:
+- Earnings surprises
+- Regulatory shifts
+- Mergers and Acquisitions
+- New product launches
+- Sentiment shifts
+
+Return a single synthesized summary.
+"""
+
+# Native Google Search Grounding Tool definition
+from langchain_google_community import GoogleSearchAPIWrapper
+from langchain_core.tools import Tool
+
+# Example usage for your news_agent:
+search = GoogleSearchAPIWrapper(
+    google_api_key=os.getenv('GOOGLE_API_KEY'),
+    google_cse_id=os.getenv('GOOGLE_CSE_ID')
+)
+google_search_tool = Tool(
+    name="google_search",
+    description="Search Google for recent news.",
+    func=search.run,
+)
+# Configure a specific model instance for the News Agent that has Grounding enabled
+# Note: This requires the 'google_search_retrieval' capability
+# grounded_model = ChatGoogleGenerativeAI(
+#     model=os.getenv('MODEL'),
+#     temperature=0,
+#     google_search_retrieval=True # Enable native grounding
+# )
+
 news_agent = create_react_agent(
     model=model,
-    tools=[], # No custom tools needed, Grounding is handled upstream or by the model natively if configured
+    tools=[google_search_tool], # Tools are handled natively by the model's grounding capability
 )
