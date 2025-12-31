@@ -6,7 +6,8 @@ load_dotenv()
 
 model = ChatGoogleGenerativeAI(
     model=os.getenv('MODEL'),
-    temperature=0
+    temperature=0,
+    google_api_key=os.getenv('GOOGLE_AI_API_KEY')
 )
 
 def low_level_reflection(news_summary: str, price_trend: str):

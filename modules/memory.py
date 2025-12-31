@@ -13,14 +13,15 @@ os.makedirs(db_path, exist_ok=True)
 client = chromadb.PersistentClient(path=db_path)
 collection = client.get_or_create_collection(name="market_memory")
 
-def store_event(ticker: str, summary: str, action: str, reasoning: str):
+def store_event(ticker: str, summary: str, action: str, reasoning: str, grounding_data: str = ""):
     """
-    Stores a trading decision and its context.
+    Stores a trading decision and its context, including full news content.
     """
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
     
     # We combine info into a text document to embed
-    document = f"Date: {date_str} | Ticker: {ticker} | Action: {action} | Reasoning: {reasoning} | EventSummary: {summary}"
+    # We append the grounding data (full search results) to the document so it is searchable
+    document = f"Date: {date_str} | Ticker: {ticker} | Action: {action} | Reasoning: {reasoning} | EventSummary: {summary} | FullContext: {grounding_data}"
     
     collection.add(
         documents=[document],

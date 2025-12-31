@@ -27,7 +27,10 @@ def run_finagent(ticker: str, query: str = None):
     # Run the graph
     # Note: This will trigger API calls. 
     # Use 'invoke' to run to completion.
-    initial_state = {"messages": [HumanMessage(content=user_input)]}
+    initial_state = {
+        "messages": [HumanMessage(content=user_input)],
+        "ticker": ticker
+    }
     result = graph.invoke(initial_state)
     
     # Extract the final structured response

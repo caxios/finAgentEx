@@ -40,7 +40,8 @@ def get_balance_sheet(ticker: str):
 # Define the shared model
 model = ChatGoogleGenerativeAI(
     model=os.getenv('MODEL'),
-    temperature=0
+    temperature=0,
+    google_api_key=os.getenv('GOOGLE_AI_API_KEY')
 )
 
 # --- Price Agent ---
@@ -78,7 +79,7 @@ from langchain_core.tools import Tool
 
 # Example usage for your news_agent:
 search = GoogleSearchAPIWrapper(
-    google_api_key=os.getenv('GOOGLE_API_KEY'),
+    google_api_key=os.getenv('GOOGLE_SEARCH_API_KEY'),
     google_cse_id=os.getenv('GOOGLE_CSE_ID')
 )
 google_search_tool = Tool(
@@ -87,6 +88,11 @@ google_search_tool = Tool(
     func=search.run,
 )
 # Configure a specific model instance for the News Agent that has Grounding enabled
+grounded_model = ChatGoogleGenerativeAI(
+    model=os.getenv('MODEL'),
+    temperature=0,
+    google_api_key=os.getenv('GOOGLE_AI_API_KEY')
+)
 # Note: This requires the 'google_search_retrieval' capability
 # grounded_model = ChatGoogleGenerativeAI(
 #     model=os.getenv('MODEL'),
@@ -94,7 +100,6 @@ google_search_tool = Tool(
 #     google_search_retrieval=True # Enable native grounding
 # )
 
-news_agent = create_react_agent(
-    model=model,
-    tools=[google_search_tool], # Tools are handled natively by the model's grounding capability
-)
+# Note: For Native Grounding, we use the model directly as a primitive agent (Zero-Shot RAG)
+# We do not need the ReAct loop because the model handles the search/generation in one pass.
+news_agent = grounded_model

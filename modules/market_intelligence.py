@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize Google GenAI Client
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+client = genai.Client(api_key=os.getenv("GOOGLE_AI_API_KEY"))
 
 def fetch_market_data(ticker: str, period: str = "1mo"):
     """

@@ -1,24 +1,20 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, Field
+from modules.models import TradingSignal
 from dotenv import load_dotenv
 
 import os
 load_dotenv()
 
-class TradingDecision(BaseModel):
-    Action: str = Field(description="BUY, SELL, or HOLD")
-    Reasoning: str = Field(description="Detailed explanation of the decision")
-    Confidence: float = Field(description="Confidence score between 0.0 and 1.0")
-
 model = ChatGoogleGenerativeAI(
     model=os.getenv('MODEL'),
-    temperature=0
+    temperature=0,
+    google_api_key=os.getenv('GOOGLE_AI_API_KEY')
 )
 
 def make_decision(ticker: str, news_summary: str, memories: list, reflections: str, price_patterns: dict):
     """
-    Synthesizes all text-based inputs to make a trading decision.
+    Synthesizes all multimodal inputs to make a trading decision.
     """
     print("Synthesizing data for final decision...")
         
@@ -49,10 +45,13 @@ Analyze the following data for {ticker} and make a trading decision.
 - History: {price_patterns.get('history_summary')}
 
 Based on ALL inputs, decide on an action (BUY, SELL, or HOLD).
-Provide a structured JSON response.
+Provide a comprehensive rationale including:
+- Timeframe (e.g., Short-term vs Long-term)
+- Risk Factors (What could go wrong?)
+- Confidence Score
 """
     )
     
     # 4. Invoke with Structured Output
-    response = model.with_structured_output(TradingDecision).invoke([message])
+    response = model.with_structured_output(TradingSignal).invoke([message])
     return response.model_dump()
