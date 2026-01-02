@@ -19,6 +19,27 @@ import json
 load_dotenv()
 
 
+def serialize_for_json(obj):
+    """Helper function to convert objects to JSON-serializable format."""
+    import numpy as np
+    import pandas as pd
+    
+    if isinstance(obj, dict):
+        return {serialize_for_json(k): serialize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [serialize_for_json(i) for i in obj]
+    elif isinstance(obj, (pd.Timestamp, pd.DatetimeIndex)):
+        return str(obj)
+    elif isinstance(obj, (np.integer, np.floating)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif hasattr(obj, 'isoformat'):
+        return obj.isoformat()
+    else:
+        return obj
+
+
 # --- 1. Define Enhanced State ---
 class AgentState(TypedDict):
     ticker: str
@@ -108,6 +129,7 @@ def call_news_agent(state: AgentState):
     """
     News Agent that uses Google Search tool to find recent financial news.
     This is a ReAct agent that can autonomously search and synthesize news.
+    Saves raw search results for tracking.
     """
     print("--> Calling News Agent (ReAct with Google Search)")
     
@@ -133,27 +155,55 @@ Provide a comprehensive analysis of the news landscape and its potential impact 
     
     # Invoke the ReAct agent - it will autonomously use the google_search tool
     print(f"    [News Agent] Invoking ReAct agent to search for {ticker} news...")
+    raw_search_outputs = []  # Collect all raw search results
+    
     try:
         response = news_agent.invoke({
             "messages": [HumanMessage(content=agent_prompt)]
         })
+        
+        # Extract raw tool outputs from the message history
+        for msg in response.get("messages", []):
+            # Check for tool messages (raw search results)
+            if hasattr(msg, 'type') and msg.type == 'tool':
+                raw_search_outputs.append({
+                    "tool_name": getattr(msg, 'name', 'google_search'),
+                    "raw_output": msg.content
+                })
+            # Also check for ToolMessage class
+            elif msg.__class__.__name__ == 'ToolMessage':
+                raw_search_outputs.append({
+                    "tool_name": getattr(msg, 'name', 'google_search'),
+                    "raw_output": msg.content
+                })
+        
         ai_msg = response["messages"][-1]
-        raw_results = ai_msg.content
+        agent_synthesis = ai_msg.content
+        
     except Exception as e:
         print(f"    [News Agent] Agent invocation failed: {e}")
         ai_msg = HumanMessage(content=f"News search failed: {e}")
-        raw_results = "News search failed. No data available."
+        agent_synthesis = "News search failed. No data available."
+    
+    # Build comprehensive raw context
+    raw_context = {
+        "agent_synthesis": agent_synthesis,
+        "raw_search_results": raw_search_outputs,
+        "search_count": len(raw_search_outputs)
+    }
+    
+    print(f"    [News Agent] Captured {len(raw_search_outputs)} raw search outputs")
     
     # Convert to Structured Output
     print("    [News Agent] Converting to Structured Output...")
     try:
         structured_llm = model.with_structured_output(NewsSignal)
-        signal = structured_llm.invoke(f"Extract the following news analysis into a structured signal:\n\n{raw_results}")
+        signal = structured_llm.invoke(f"Extract the following news analysis into a structured signal:\n\n{agent_synthesis}")
     except Exception as e:
         print(f"    [News Agent] Structured output failed: {e}")
         from modules.models import SentimentType, SignalType
         signal = NewsSignal(
-            summary=raw_results[:500] if len(raw_results) > 500 else raw_results,
+            summary=agent_synthesis[:500] if len(agent_synthesis) > 500 else agent_synthesis,
             sentiment=SentimentType.UNCERTAIN,
             impact_assessment="Unable to assess impact due to processing error",
             signal=SignalType.HOLD,
@@ -163,7 +213,7 @@ Provide a comprehensive analysis of the news landscape and its potential impact 
     return {
         "messages": [ai_msg],
         "news_signal": signal,
-        "news_context": raw_results
+        "news_context": raw_context  # Now contains both synthesis and raw search outputs
     }
 
 
@@ -320,6 +370,7 @@ def synthesis_node(state: AgentState):
 def storage_node(state: AgentState):
     """
     Enhanced Storage Node with richer metadata.
+    Saves to both ChromaDB (for retrieval) and JSON log files (for tracking).
     """
     print("--> Calling Storage Node (Learning)")
     
@@ -328,14 +379,17 @@ def storage_node(state: AgentState):
     news = state.get('news_signal')
     full_news = state.get('news_context', "No detailed search data.")
     multi_tf_data = state.get('multi_timeframe_data', {})
+    reflections = state.get('reflections', {})
+    reflection_synthesis = state.get('reflection_synthesis', '')
     
     if final_signal:
+        # 1. Save to ChromaDB for memory retrieval
         store_event(
             ticker=ticker, 
             summary=news.summary if news else "", 
             action=final_signal.decision.value,
             reasoning=final_signal.reasoning,
-            grounding_data=full_news,
+            grounding_data=json.dumps(full_news) if isinstance(full_news, dict) else str(full_news),
             confidence=final_signal.confidence,
             timeframe=final_signal.timeframe,
             price_at_decision=multi_tf_data.get('current_price', 0.0)

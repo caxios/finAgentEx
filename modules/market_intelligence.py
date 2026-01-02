@@ -1,5 +1,3 @@
-from google import genai
-from google.genai import types
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -7,9 +5,6 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# Initialize Google GenAI Client
-client = genai.Client(api_key=os.getenv("GOOGLE_AI_API_KEY"))
 
 
 def fetch_market_data(ticker: str, period: str = "1mo"):
@@ -22,34 +17,7 @@ def fetch_market_data(ticker: str, period: str = "1mo"):
     stock = yf.Ticker(ticker)
     hist = stock.history(period=period)
     
-    # 2. Get News via Google Search Grounding
-    print(f"Searching news for {ticker} with Google Grounding...")
-    
-    grounding_tool = types.Tool(
-        google_search=types.GoogleSearch()
-    )
-
-    grounding_config = types.GenerateContentConfig(
-        tools=[grounding_tool],
-        temperature=0.0 # Strict factual search
-    )
-    
-    prompt = f"""
-    Find the latest important financial news, quarterly earnings reports, and major events for {ticker} 
-    from the last 3 months. Summarize the key points that would affect the stock price.
-    Also mention if there are any upcoming earnings or fed decisions relevant to it.
-    """
-
-    response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=grounding_config,
-    )
-    
-    # The response.text contains the grounded summary with citations
-    news_summary = response.text
-    
-    return hist, news_summary
+    return hist
 
 
 def calculate_technical_indicators(hist: pd.DataFrame) -> dict:

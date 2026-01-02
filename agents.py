@@ -39,7 +39,7 @@ def get_historical_stock_price(ticker: str, start_date: str, end_date: str):
 def get_price_analysis(ticker: str):
     print('    [Price Agent] Analyzing price patterns...')
     # Fetch 1 year of data for deep analysis
-    hist, _ = fetch_market_data(ticker, period="1y") 
+    hist = fetch_market_data(ticker, period="1y") 
     analysis = analyze_price_patterns(hist)
     return analysis
 
