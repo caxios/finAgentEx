@@ -1,69 +1,124 @@
-import yfinance as yf
-import undetected_chromedriver as uc
-import time
-import random
-from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+"""
+Test script for Multi-Agent Stock Analysis System
+"""
 
-data = yf.Ticker('AAPL').get_news(count=100)
-
-news_list = [
-    {
-        "title": item['content']['title'],
-        "summary": item['content']['summary'],
-        "pubDate": item['content']['pubDate'][:10],
-        "url": item['content']['clickThroughUrl']['url'] if item['content']['clickThroughUrl'] else None
-    }
-    for item in data[:20]
-    if 'content' in item
-]
-
-url = news_list[0]['url']
+from graph import graph, analyze_stock
+from langchain_core.messages import HumanMessage
 
 
-# 옵션 설정
-options = uc.ChromeOptions()
-# options.add_argument('--headless') # 필요하면 주석 해제 (화면 안 보임)
-
-print("브라우저를 실행합니다 (봇 탐지 우회 모드)...")
-# version_main은 본인 크롬 버전에 맞춰주면 좋지만, 보통 안 적어도 알아서 잡습니다.
-driver = uc.Chrome(options=options, use_subprocess=True)
-
-try:
-    driver.get(url)
+def test_single_stock(ticker: str = "AAPL"):
+    """Test the multi-agent system with a single stock."""
+    print(f"\n{'='*70}")
+    print(f"TESTING MULTI-AGENT ANALYSIS FOR: {ticker}")
+    print(f"{'='*70}\n")
     
-    # 사람이 들어간 것처럼 3~5초 정도 여유 있게 기다려줍니다.
-    print("페이지 로딩 대기 중...")
-    time.sleep(random.uniform(4, 6)) # 랜덤하게 쉬면 더 사람 같습니다.
+    # Run the analysis
+    signal = analyze_stock(ticker)
     
-    # HTML 가져오기
-    html = driver.page_source
-    soup = BeautifulSoup(html, 'html.parser')
-    
-    # 1. 본문 찾기 시도 (가장 흔한 클래스)
-    article = soup.find('div', class_='caas-body')
-    
-    # 2. 만약 못 찾으면 다른 클래스 이름으로도 시도 (야후 뉴스 레이아웃이 2가지임)
-    if not article:
-        article = soup.find('div', class_='ymap-container-body')
-
-    if article:
-        print("-" * 50)
-        print("★ 성공! 봇 탐지를 뚫었습니다.")
-        print("본문 내용 일부:")
-        print(article.get_text(strip=True))
-        print("-" * 50)
+    if signal:
+        print(f"\n{'='*70}")
+        print("FINAL RESULT")
+        print(f"{'='*70}")
+        print(f"Ticker: {ticker}")
+        print(f"Decision: {signal.decision.value}")
+        print(f"Confidence: {signal.confidence:.0%}")
+        print(f"Timeframe: {signal.timeframe}")
+        print(f"\nReasoning:\n{signal.reasoning}")
+        print(f"\nRisk Factors:\n{signal.risk_factors}")
+        print(f"{'='*70}\n")
+        return signal
     else:
-        print("여전히 'Oops'가 뜨거나 본문을 못 찾았습니다.")
-        # 디버깅: 제목이라도 제대로 떴는지 확인
-        title = soup.find('h1')
-        print(f"현재 페이지 제목: {title.get_text(strip=True) if title else '제목 없음'}")
+        print("Analysis failed - no signal returned")
+        return None
 
-except Exception as e:
-    print(f"에러 발생: {e}")
 
-finally:
-    driver.quit()
-    print("종료")
+def test_data_tools():
+    """Test the data tools module directly."""
+    from data_tools import (
+        fetch_period_data,
+        fetch_news_for_ticker,
+        fetch_single_ticker_data,
+        generate_technical_chart,
+        get_cache_info
+    )
+    
+    print("\n" + "="*50)
+    print("TESTING DATA TOOLS")
+    print("="*50 + "\n")
+    
+    ticker = "MSFT"
+    
+    # Test news fetching
+    print("1. Testing fetch_news_for_ticker...")
+    news = fetch_news_for_ticker(ticker, count=5)
+    print(f"   Retrieved {len(news)} news articles")
+    for i, article in enumerate(news[:3], 1):
+        print(f"   {i}. {article['title'][:50]}...")
+    
+    # Test OHLCV data fetching
+    print("\n2. Testing fetch_single_ticker_data...")
+    df = fetch_single_ticker_data(ticker, period="1mo")
+    if df is not None:
+        print(f"   Retrieved {len(df)} rows of OHLCV data")
+        print(f"   Date range: {df.index[0].date()} to {df.index[-1].date()}")
+        print(f"   Current price: ${df['Close'].iloc[-1]:.2f}")
+    
+    # Test chart generation
+    print("\n3. Testing generate_technical_chart...")
+    if df is not None:
+        chart_path = generate_technical_chart(ticker, df)
+        print(f"   Chart saved to: {chart_path}")
+    
+    # Test cache
+    print("\n4. Testing cache...")
+    cache_info = get_cache_info()
+    print(f"   Cached entries: {cache_info['total_entries']}")
+    print(f"   Cached keys: {cache_info['cached_keys']}")
+    
+    print("\n" + "="*50)
+    print("DATA TOOLS TEST COMPLETE")
+    print("="*50 + "\n")
+
+
+def test_graph_state():
+    """Test the graph with full state inspection."""
+    print("\n" + "="*50)
+    print("TESTING GRAPH STATE")
+    print("="*50 + "\n")
+    
+    result = graph.invoke({
+        "ticker": "NVDA",
+        "messages": [HumanMessage(content="Analyze NVDA")]
+    })
+    
+    print("\nFinal State Keys:")
+    for key in result.keys():
+        value = result[key]
+        if value is not None:
+            if isinstance(value, str):
+                print(f"  {key}: {value[:100]}..." if len(value) > 100 else f"  {key}: {value}")
+            elif isinstance(value, list):
+                print(f"  {key}: [{len(value)} items]")
+            elif isinstance(value, dict):
+                print(f"  {key}: {{{len(value)} keys}}")
+            else:
+                print(f"  {key}: {type(value).__name__}")
+        else:
+            print(f"  {key}: None")
+    
+    return result
+
+
+if __name__ == "__main__":
+    import sys
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--tools":
+            test_data_tools()
+        elif sys.argv[1] == "--state":
+            test_graph_state()
+        else:
+            test_single_stock(sys.argv[1])
+    else:
+        # Default: test with AAPL
+        test_single_stock("AAPL")
