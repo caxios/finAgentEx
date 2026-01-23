@@ -6,6 +6,8 @@ Implements data fetching and caching following reference code patterns.
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend to avoid Tkinter threading issues
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from datetime import datetime, timedelta
@@ -140,6 +142,10 @@ def fetch_news_for_ticker(ticker: str, count: int = 10) -> List[dict]:
         data = yf.Ticker(ticker.upper()).get_news(count=count)
         news_list = []
         
+        if not data:
+            print(f"[!] {ticker} : No news articles found")
+            return []
+        
         for item in data[:count]:
             if 'content' not in item:
                 continue
@@ -147,7 +153,8 @@ def fetch_news_for_ticker(ticker: str, count: int = 10) -> List[dict]:
             content = item['content']
             
             # Extract URL following reference code logic
-            url = content.get('clickThroughUrl', {}).get('url')
+            click_url_obj = content.get('clickThroughUrl')
+            url = click_url_obj.get('url') if click_url_obj else None
             
             # Extract and format publication date
             pub_date_raw = content.get('pubDate', '')
@@ -248,8 +255,8 @@ def generate_ohlcv_chart(ticker: str, df: pd.DataFrame, save_path: Optional[str]
 
 def generate_technical_chart(ticker: str, df: pd.DataFrame, save_path: Optional[str] = None) -> str:
     """
-    Generate a comprehensive technical analysis chart with indicators.
-    Includes: Price with MAs, RSI, MACD, Volume.
+    Generate a comprehensive technical analysis chart with candlesticks.
+    Includes: Candlestick with MA 5/20/50, Volume with MA 5/20/50, RSI, MACD.
     
     Args:
         ticker: Stock ticker symbol
@@ -264,10 +271,20 @@ def generate_technical_chart(ticker: str, df: pd.DataFrame, save_path: Optional[
     
     # Calculate indicators
     closes = df['Close']
+    opens = df['Open']
+    highs = df['High']
+    lows = df['Low']
+    volumes = df['Volume']
     
-    # Moving Averages
+    # Price Moving Averages (5, 20, 50)
+    ma5 = closes.rolling(window=5).mean() if len(df) >= 5 else closes
     ma20 = closes.rolling(window=20).mean() if len(df) >= 20 else closes
     ma50 = closes.rolling(window=50).mean() if len(df) >= 50 else closes
+    
+    # Volume Moving Averages (5, 20, 50)
+    vol_ma5 = volumes.rolling(window=5).mean() if len(df) >= 5 else volumes
+    vol_ma20 = volumes.rolling(window=20).mean() if len(df) >= 20 else volumes
+    vol_ma50 = volumes.rolling(window=50).mean() if len(df) >= 50 else volumes
     
     # RSI
     delta = closes.diff()
@@ -284,55 +301,82 @@ def generate_technical_chart(ticker: str, df: pd.DataFrame, save_path: Optional[
     macd_hist = macd_line - signal_line
     
     # Create figure with 4 subplots
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(14, 14),
-                                              gridspec_kw={'height_ratios': [3, 1, 1, 1]},
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(16, 16),
+                                              gridspec_kw={'height_ratios': [4, 1.5, 1, 1]},
                                               sharex=True)
     
-    fig.suptitle(f'{ticker} - Technical Analysis', fontsize=14, fontweight='bold')
+    fig.suptitle(f'{ticker} - Technical Analysis (Candlestick)', fontsize=14, fontweight='bold')
     
-    x = range(len(df))
+    x = np.arange(len(df))
     
-    # Price with MAs
-    ax1.plot(x, closes, 'k-', linewidth=1.5, label='Close')
-    ax1.plot(x, ma20, 'b-', linewidth=1, label='MA20', alpha=0.7)
-    ax1.plot(x, ma50, 'orange', linewidth=1, label='MA50', alpha=0.7)
-    ax1.fill_between(x, df['Low'], df['High'], alpha=0.1, color='gray')
-    ax1.set_ylabel('Price')
-    ax1.legend(loc='upper left')
-    ax1.grid(True, alpha=0.3)
+    # ===== CANDLESTICK CHART =====
+    # Determine colors
+    colors = ['#26A69A' if c >= o else '#EF5350' for c, o in zip(closes, opens)]  # Green / Red
     
-    # Volume
-    colors = ['green' if c >= o else 'red' for c, o in zip(df['Close'], df['Open'])]
-    ax2.bar(x, df['Volume'], color=colors, alpha=0.7)
-    ax2.set_ylabel('Volume')
-    ax2.grid(True, alpha=0.3)
+    # Draw candlesticks
+    width = 0.6
+    for i in range(len(df)):
+        o, h, l, c = opens.iloc[i], highs.iloc[i], lows.iloc[i], closes.iloc[i]
+        color = colors[i]
+        
+        # Wick (high-low line)
+        ax1.plot([i, i], [l, h], color=color, linewidth=0.8)
+        
+        # Body (open-close rectangle)
+        body_bottom = min(o, c)
+        body_height = abs(c - o)
+        if body_height < 0.001:  # Doji - very small body
+            body_height = 0.001
+        ax1.bar(i, body_height, bottom=body_bottom, width=width, 
+                color=color, edgecolor=color, linewidth=0.5)
     
-    # RSI
-    ax3.plot(x, rsi, 'purple', linewidth=1)
-    ax3.axhline(y=70, color='r', linestyle='--', alpha=0.5)
-    ax3.axhline(y=30, color='g', linestyle='--', alpha=0.5)
-    ax3.fill_between(x, 30, 70, alpha=0.1, color='gray')
-    ax3.set_ylabel('RSI')
+    # Price Moving Averages
+    ax1.plot(x, ma5, color='#2196F3', linewidth=1.2, label='MA5', alpha=0.9)
+    ax1.plot(x, ma20, color='#FF9800', linewidth=1.2, label='MA20', alpha=0.9)
+    ax1.plot(x, ma50, color='#9C27B0', linewidth=1.2, label='MA50', alpha=0.9)
+    
+    ax1.set_ylabel('Price', fontsize=10)
+    ax1.legend(loc='upper left', fontsize=8)
+    ax1.grid(True, alpha=0.3, linestyle='--')
+    ax1.set_xlim(-1, len(df))
+    
+    # ===== VOLUME CHART WITH MAs =====
+    ax2.bar(x, volumes, color=colors, alpha=0.6, width=width)
+    ax2.plot(x, vol_ma5, color='#2196F3', linewidth=1, label='Vol MA5', alpha=0.9)
+    ax2.plot(x, vol_ma20, color='#FF9800', linewidth=1, label='Vol MA20', alpha=0.9)
+    ax2.plot(x, vol_ma50, color='#9C27B0', linewidth=1, label='Vol MA50', alpha=0.9)
+    ax2.set_ylabel('Volume', fontsize=10)
+    ax2.legend(loc='upper left', fontsize=8)
+    ax2.grid(True, alpha=0.3, linestyle='--')
+    
+    # ===== RSI =====
+    ax3.plot(x, rsi, color='#7E57C2', linewidth=1.2)
+    ax3.axhline(y=70, color='#EF5350', linestyle='--', alpha=0.7, linewidth=0.8)
+    ax3.axhline(y=30, color='#26A69A', linestyle='--', alpha=0.7, linewidth=0.8)
+    ax3.axhline(y=50, color='gray', linestyle='-', alpha=0.3, linewidth=0.5)
+    ax3.fill_between(x, 30, 70, alpha=0.05, color='gray')
+    ax3.set_ylabel('RSI', fontsize=10)
     ax3.set_ylim(0, 100)
-    ax3.grid(True, alpha=0.3)
+    ax3.grid(True, alpha=0.3, linestyle='--')
     
-    # MACD
-    ax4.plot(x, macd_line, 'b-', linewidth=1, label='MACD')
-    ax4.plot(x, signal_line, 'r-', linewidth=1, label='Signal')
-    macd_colors = ['green' if h >= 0 else 'red' for h in macd_hist]
-    ax4.bar(x, macd_hist, color=macd_colors, alpha=0.5)
-    ax4.axhline(y=0, color='black', linestyle='-', alpha=0.3)
-    ax4.set_ylabel('MACD')
-    ax4.legend(loc='upper left')
-    ax4.grid(True, alpha=0.3)
+    # ===== MACD =====
+    ax4.plot(x, macd_line, color='#2196F3', linewidth=1, label='MACD')
+    ax4.plot(x, signal_line, color='#FF9800', linewidth=1, label='Signal')
+    macd_colors = ['#26A69A' if h >= 0 else '#EF5350' for h in macd_hist]
+    ax4.bar(x, macd_hist, color=macd_colors, alpha=0.6, width=width)
+    ax4.axhline(y=0, color='gray', linestyle='-', alpha=0.5, linewidth=0.5)
+    ax4.set_ylabel('MACD', fontsize=10)
+    ax4.legend(loc='upper left', fontsize=8)
+    ax4.grid(True, alpha=0.3, linestyle='--')
     
-    # Format x-axis
+    # Format x-axis with dates
     dates = df.index
-    tick_positions = list(range(0, len(dates), max(1, len(dates) // 10)))
-    tick_labels = [dates[i].strftime('%Y-%m-%d') for i in tick_positions]
+    tick_count = min(12, len(dates))
+    tick_positions = list(range(0, len(dates), max(1, len(dates) // tick_count)))
+    tick_labels = [dates[i].strftime('%m-%d') for i in tick_positions]
     ax4.set_xticks(tick_positions)
-    ax4.set_xticklabels(tick_labels, rotation=45, ha='right')
-    ax4.set_xlabel('Date')
+    ax4.set_xticklabels(tick_labels, rotation=45, ha='right', fontsize=8)
+    ax4.set_xlabel('Date', fontsize=10)
     
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight',
