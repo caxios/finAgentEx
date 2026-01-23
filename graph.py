@@ -149,8 +149,8 @@ def news_agent_node(state: AgentState) -> dict:
     
     ticker = state.get('ticker', 'UNKNOWN')
     
-    # Fetch news using the reference code pattern
-    news_list = fetch_news_for_ticker(ticker, count=10)
+    # Fetch news using the reference code pattern (uses default count from data_tools)
+    news_list = fetch_news_for_ticker(ticker)
     
     if news_list:
         print(f"      Retrieved {len(news_list)} news articles")
@@ -179,7 +179,7 @@ def blog_agent_node(state: AgentState) -> dict:
             response = tavily_client.search(
                 query=query,
                 search_depth="advanced",
-                max_results=5,
+                max_results=10,
                 include_domains=["seekingalpha.com", "fool.com", "reddit.com", 
                                 "stocktwits.com", "medium.com", "substack.com"]
             )

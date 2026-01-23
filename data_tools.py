@@ -126,7 +126,7 @@ def fetch_intraday_data(ticker: str, target_date: str) -> Optional[pd.DataFrame]
         return None
 
 
-def fetch_news_for_ticker(ticker: str, count: int = 10) -> List[dict]:
+def fetch_news_for_ticker(ticker: str, count: int = 25) -> List[dict]:
     """
     Fetch news using yfinance.
     Follows Reference Code B pattern strictly.
