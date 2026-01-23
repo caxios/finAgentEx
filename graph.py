@@ -31,7 +31,7 @@ load_dotenv()
 
 # --- Initialize Models ---
 model = ChatGoogleGenerativeAI(
-    model=os.getenv('MODEL', 'gemini-1.5-flash'),
+    model=os.getenv('MODEL', 'gemini-2.5-flash-lite'),
     temperature=0,
     google_api_key=os.getenv('GOOGLE_AI_API_KEY')
 )
@@ -39,6 +39,13 @@ model = ChatGoogleGenerativeAI(
 # Gemini Vision model for chart analysis (uses same model as main)
 vision_model = ChatGoogleGenerativeAI(
     model=os.getenv('MODEL', 'gemini-2.0-flash'),
+    temperature=0,
+    google_api_key=os.getenv('GOOGLE_AI_API_KEY')
+)
+
+# Strategy model for final decision (more powerful model)
+strategy_model = ChatGoogleGenerativeAI(
+    model=os.getenv('STRATEGY_MODEL', 'gemini-2.5-pro'),
     temperature=0,
     google_api_key=os.getenv('GOOGLE_AI_API_KEY')
 )
@@ -346,7 +353,7 @@ def sentiment_agent_node(state: AgentState) -> dict:
     text_sources = []
     
     # Add news content
-    for news in news_data[:5]:
+    for news in news_data[:10]:
         text_sources.append({
             "source": "News",
             "title": news.get('title', ''),
@@ -354,11 +361,11 @@ def sentiment_agent_node(state: AgentState) -> dict:
         })
     
     # Add blog content
-    for blog in blog_data[:3]:
+    for blog in blog_data[:5]:
         text_sources.append({
             "source": blog.get('source', 'Blog'),
             "title": blog.get('title', ''),
-            "content": blog.get('content', '')[:500]  # Limit content length
+            "content": blog.get('content', '')[:5000]  # Limit content length
         })
     
     if not text_sources:
@@ -484,8 +491,11 @@ Be specific and actionable. Consider risk-adjusted returns.
 Respond in JSON format with keys: decision, confidence, timeframe, reasoning, risk_factors"""
 
     try:
-        response = model.invoke([HumanMessage(content=strategy_prompt)])
-        content = response.content
+        response = strategy_model.invoke([HumanMessage(content=strategy_prompt)])
+        content = response.content if response and response.content else ""
+        
+        if not content:
+            raise ValueError("Empty response from strategy model")
         
         # Parse JSON response
         import re
