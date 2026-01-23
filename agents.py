@@ -29,7 +29,7 @@ from data_tools import (
 
 # --- Define the shared model ---
 model = ChatGoogleGenerativeAI(
-    model=os.getenv('MODEL', 'gemini-1.5-flash'),
+    model=os.getenv('MODEL', 'gemini-2.5-flash-lite'),
     temperature=0,
     google_api_key=os.getenv('GOOGLE_AI_API_KEY')
 )

@@ -187,6 +187,8 @@ def blog_agent_node(state: AgentState) -> dict:
                 })
             
             print(f"      Retrieved {len(blog_list)} blog/social posts")
+            for i, blog in enumerate(blog_list, 1):
+                print(f"        {i}. [{blog['source']}] {blog['url']}")
             
         except Exception as e:
             print(f"      Tavily search failed: {e}")
