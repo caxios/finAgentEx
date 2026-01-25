@@ -1,0 +1,38 @@
+# ==============================================================================
+# FinAgentEx - Backend Requirements
+# Multi-Agent Stock Analysis System
+# ==============================================================================
+
+# --- Core Web Framework ---
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.0.0
+
+# --- Data Processing ---
+pandas>=2.0.0
+numpy>=1.24.0
+
+# --- Stock Data & Finance ---
+yfinance>=0.2.36
+
+# --- AI/LLM Framework ---
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-google-genai>=1.0.0
+langgraph>=0.0.40
+
+# --- Chart Generation ---
+matplotlib>=3.7.0
+
+# --- SEC EDGAR Data ---
+edgartools>=2.0.0
+
+# --- Web Search (Optional) ---
+tavily-python>=0.3.0
+
+# --- Environment Variables ---
+python-dotenv>=1.0.0
+
+# --- HTTP Client (for Tavily) ---
+httpx>=0.25.0
+
