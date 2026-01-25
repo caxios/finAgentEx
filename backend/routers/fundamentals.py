@@ -7,6 +7,8 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import pandas as pd
+from datetime import datetime
+import re
 
 # EDGAR environment variables are set in main.py before this import
 from edgar import Company, set_identity
@@ -29,19 +31,63 @@ class FundamentalsResponse(BaseModel):
     error: Optional[str] = None
 
 
-def calculate_yoy(values: Dict[str, float], periods: List[str]) -> Dict[str, Dict[str, Any]]:
+def date_to_label(date_str: str, is_annual: bool = False) -> str:
+    """Convert date string (2025-09-30) to display label."""
+    try:
+        if isinstance(date_str, str):
+            # Handle different date formats
+            if re.match(r'^\d{4}$', date_str):
+                return date_str  # Already just a year
+            date = datetime.strptime(date_str, "%Y-%m-%d")
+        else:
+            date = date_str
+        
+        if is_annual:
+            return str(date.year)
+        
+        # For quarterly, return 2025Q3 format
+        month = date.month
+        if month <= 3:
+            quarter = "Q1"
+        elif month <= 6:
+            quarter = "Q2"
+        elif month <= 9:
+            quarter = "Q3"
+        else:
+            quarter = "Q4"
+        
+        return f"{date.year}{quarter}"
+    except:
+        return str(date_str)
+
+
+def calculate_yoy(values: Dict[str, Any], periods: List[str]) -> Dict[str, Dict[str, Any]]:
     """Calculate YoY % change for each period."""
     result = {}
     sorted_periods = sorted(periods, reverse=True)  # Most recent first
     
     for i, period in enumerate(sorted_periods):
-        value = values.get(period)
+        data = values.get(period, {})
+        if isinstance(data, dict):
+            value = data.get("value")
+        else:
+            value = data
+        
         yoy = None
         
-        # Calculate YoY if we have previous period
-        if i + 1 < len(sorted_periods):
+        # Calculate YoY if we have previous year's same period
+        # For quarterly: compare 2025Q3 with 2024Q3
+        # For annual: compare 2025 with 2024
+        if i + 4 < len(sorted_periods):  # 4 quarters ago for quarterly
+            prev_period = sorted_periods[i + 4]
+            prev_data = values.get(prev_period, {})
+            prev_value = prev_data.get("value") if isinstance(prev_data, dict) else prev_data
+            if value is not None and prev_value is not None and prev_value != 0:
+                yoy = round((value - prev_value) / abs(prev_value) * 100, 2)
+        elif i + 1 < len(sorted_periods):  # Fallback: compare with previous period
             prev_period = sorted_periods[i + 1]
-            prev_value = values.get(prev_period)
+            prev_data = values.get(prev_period, {})
+            prev_value = prev_data.get("value") if isinstance(prev_data, dict) else prev_data
             if value is not None and prev_value is not None and prev_value != 0:
                 yoy = round((value - prev_value) / abs(prev_value) * 100, 2)
         
@@ -53,38 +99,45 @@ def calculate_yoy(values: Dict[str, float], periods: List[str]) -> Dict[str, Dic
     return result
 
 
-def format_value(value: float) -> str:
-    """Format value in billions/millions."""
-    if value is None:
-        return None
-    abs_val = abs(value)
-    if abs_val >= 1e9:
-        return round(value / 1e9, 2)
-    elif abs_val >= 1e6:
-        return round(value / 1e6, 2)
-    else:
-        return round(value, 2)
-
-
-def process_statement_df(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """Process DataFrame to structured list with YoY calculations."""
+def process_statement_df(df: pd.DataFrame, is_annual: bool = True) -> tuple:
+    """
+    Process DataFrame to structured list with YoY calculations.
+    Returns (rows, periods)
+    """
     if df is None or df.empty:
-        return []
+        return [], []
     
     rows = []
     # Get period columns (exclude metadata columns)
-    period_cols = [col for col in df.columns if col not in ['label', 'concept', 'standard_concept', 'depth', 'is_total', 'section', 'confidence']]
+    metadata_cols = ['label', 'concept', 'standard_concept', 'depth', 'is_total', 'section', 'confidence']
+    period_cols = [col for col in df.columns if col not in metadata_cols]
+    
+    # Convert date columns to readable labels
+    period_mapping = {}
+    for col in period_cols:
+        new_label = date_to_label(str(col), is_annual)
+        period_mapping[col] = new_label
+    
+    # Get unique period labels in order
+    period_labels = []
+    seen = set()
+    for col in period_cols:
+        label = period_mapping[col]
+        if label not in seen:
+            seen.add(label)
+            period_labels.append(label)
     
     for _, row in df.iterrows():
         label = row.get('label', row.get('concept', 'Unknown'))
         
-        # Extract values for each period
+        # Extract values for each period with new labels
         values = {}
         for col in period_cols:
             val = row.get(col)
             if pd.notna(val):
                 try:
-                    values[str(col)] = float(val)
+                    new_key = period_mapping[col]
+                    values[new_key] = {"value": float(val)}
                 except (ValueError, TypeError):
                     pass
         
@@ -95,7 +148,7 @@ def process_statement_df(df: pd.DataFrame) -> List[Dict[str, Any]]:
                 "values": yoy_data
             })
     
-    return rows
+    return rows, period_labels
 
 
 @router.get("/fundamentals", response_model=FundamentalsResponse)
@@ -116,7 +169,7 @@ async def get_fundamentals(
         
         # Fetch filings
         form_type = "10-K" if is_annual else "10-Q"
-        num_filings = 10 if is_annual else 40  # 10 years annual or 10 years quarterly
+        num_filings = 10 if is_annual else 40  # 10 years annual or ~10 years quarterly
         
         filings = company.get_filings(form=form_type, amendments=False).head(num_filings)
         
@@ -132,7 +185,7 @@ async def get_fundamentals(
                 error=f"No {form_type} filings found for {ticker}"
             )
         
-        # Stitch filings together
+        # Use XBRLS stitching for both annual and quarterly
         xbrls = XBRLS.from_filings(filings)
         statements = xbrls.statements
         
@@ -163,15 +216,13 @@ async def get_fundamentals(
             print(f"Cash flow error: {e}")
         
         # Process statements
-        income_data = process_statement_df(income_df)
-        balance_data = process_statement_df(balance_df)
-        cashflow_data = process_statement_df(cashflow_df)
+        income_data, income_periods = process_statement_df(income_df, is_annual)
+        balance_data, balance_periods = process_statement_df(balance_df, is_annual)
+        cashflow_data, cashflow_periods = process_statement_df(cashflow_df, is_annual)
         
-        # Extract periods from data
-        periods = set()
-        for item in income_data + balance_data + cashflow_data:
-            periods.update(item.get("values", {}).keys())
-        periods = sorted(list(periods), reverse=True)  # Most recent first
+        # Combine all periods
+        all_periods = set(income_periods + balance_periods + cashflow_periods)
+        periods = sorted(list(all_periods), reverse=True)
         
         return FundamentalsResponse(
             success=True,
@@ -184,6 +235,8 @@ async def get_fundamentals(
         )
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return FundamentalsResponse(
             success=False,
             ticker=ticker,

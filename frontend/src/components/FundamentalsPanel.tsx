@@ -139,8 +139,8 @@ export default function FundamentalsPanel({ ticker }: FundamentalsPanelProps) {
                     <button
                         onClick={() => setPeriodType('annual')}
                         className={`px-3 py-1.5 text-sm rounded-md transition-all ${periodType === 'annual'
-                                ? 'bg-blue-500 text-white'
-                                : 'text-slate-400 hover:text-white'
+                            ? 'bg-blue-500 text-white'
+                            : 'text-slate-400 hover:text-white'
                             }`}
                     >
                         Annual (10Y)
@@ -148,8 +148,8 @@ export default function FundamentalsPanel({ ticker }: FundamentalsPanelProps) {
                     <button
                         onClick={() => setPeriodType('quarterly')}
                         className={`px-3 py-1.5 text-sm rounded-md transition-all ${periodType === 'quarterly'
-                                ? 'bg-blue-500 text-white'
-                                : 'text-slate-400 hover:text-white'
+                            ? 'bg-blue-500 text-white'
+                            : 'text-slate-400 hover:text-white'
                             }`}
                     >
                         Quarterly
@@ -164,8 +164,8 @@ export default function FundamentalsPanel({ ticker }: FundamentalsPanelProps) {
                         key={tab}
                         onClick={() => setActiveTab(tab)}
                         className={`px-4 py-2 text-sm font-medium border-b-2 transition-all ${activeTab === tab
-                                ? 'border-blue-500 text-blue-400'
-                                : 'border-transparent text-slate-400 hover:text-white'
+                            ? 'border-blue-500 text-blue-400'
+                            : 'border-transparent text-slate-400 hover:text-white'
                             }`}
                     >
                         {tab}
@@ -183,7 +183,7 @@ export default function FundamentalsPanel({ ticker }: FundamentalsPanelProps) {
                             </th>
                             {periods.slice(0, 10).map(period => (
                                 <th key={period} className="text-right py-2 px-3 font-medium whitespace-nowrap">
-                                    {period.split('-')[0]}
+                                    {period}
                                 </th>
                             ))}
                         </tr>
