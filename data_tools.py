@@ -109,43 +109,53 @@ def fetch_period_data(tickers: List[str], period: str = "3mo") -> Dict[str, pd.D
                 last_cached_date = get_ohlcv_last_date(ticker)
                 
                 if not cached_df.empty and last_cached_date:
-                    # Check if we need to fetch new data
-                    today = datetime.now().strftime('%Y-%m-%d')
+                    # Check if cache covers enough history (start date)
+                    cache_start = pd.to_datetime(cached_df.index[0])
+                    req_start = pd.to_datetime(start_date)
                     
-                    if last_cached_date >= today:
-                        # Cache is up to date
-                        print(f"[OK] {ticker} (from SQLite cache, {len(cached_df)} rows)")
-                        DATA_CACHE[cache_key] = cached_df
-                        results[ticker] = cached_df
-                        continue
-                    else:
-                        # Incremental update: fetch only new data
-                        fetch_start = (datetime.strptime(last_cached_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
-                        print(f"[*] {ticker} (incremental update from {fetch_start})")
+                    # Allow 10 days margin for weekends/holidays
+                    history_covered = cache_start <= (req_start + timedelta(days=10))
+                    
+                    if history_covered:
+                        # Check if we need to fetch new data (end date)
+                        today = datetime.now().strftime('%Y-%m-%d')
                         
-                        new_df = yf.download(ticker, start=fetch_start, progress=False)
-                        
-                        if not new_df.empty:
-                            if isinstance(new_df.columns, pd.MultiIndex):
-                                new_df.columns = new_df.columns.get_level_values(0)
-                            
-                            # Save new data to cache
-                            save_ohlcv_cache(ticker, new_df)
-                            
-                            # Combine cached + new data
-                            combined_df = pd.concat([cached_df, new_df])
-                            combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
-                            combined_df.sort_index(inplace=True)
-                            
-                            print(f"[OK] {ticker} (added {len(new_df)} new rows, total {len(combined_df)})")
-                            DATA_CACHE[cache_key] = combined_df
-                            results[ticker] = combined_df
-                        else:
-                            # No new data, use cached
-                            print(f"[OK] {ticker} (no new data, using cache)")
+                        if last_cached_date >= today:
+                            # Cache is up to date
+                            print(f"[OK] {ticker} (from SQLite cache, {len(cached_df)} rows)")
                             DATA_CACHE[cache_key] = cached_df
                             results[ticker] = cached_df
-                        continue
+                            continue
+                        else:
+                            # Incremental update: fetch only new data
+                            fetch_start = (datetime.strptime(last_cached_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+                            print(f"[*] {ticker} (incremental update from {fetch_start})")
+                            
+                            new_df = yf.download(ticker, start=fetch_start, progress=False)
+                            
+                            if not new_df.empty:
+                                if isinstance(new_df.columns, pd.MultiIndex):
+                                    new_df.columns = new_df.columns.get_level_values(0)
+                                
+                                # Save new data to cache
+                                save_ohlcv_cache(ticker, new_df)
+                                
+                                # Combine cached + new data
+                                combined_df = pd.concat([cached_df, new_df])
+                                combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+                                combined_df.sort_index(inplace=True)
+                                
+                                print(f"[OK] {ticker} (added {len(new_df)} new rows, total {len(combined_df)})")
+                                DATA_CACHE[cache_key] = combined_df
+                                results[ticker] = combined_df
+                            else:
+                                # No new data, use cached
+                                print(f"[OK] {ticker} (no new data, using cache)")
+                                DATA_CACHE[cache_key] = cached_df
+                                results[ticker] = cached_df
+                            continue
+                    else:
+                        print(f"[*] {ticker} (cache missing history: have {cache_start.date()} vs req {req_start.date()})")
             
             # No cache or cache disabled: fetch all data
             print(f"[*] {ticker} (fetching from API...)")
