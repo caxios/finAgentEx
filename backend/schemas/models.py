@@ -37,12 +37,19 @@ class OHLCVItem(BaseModel):
     low: float
     close: float
     volume: float
+    # Price moving averages
     ma5: Optional[float] = None
     ma20: Optional[float] = None
-    ma50: Optional[float] = None
+    ma60: Optional[float] = None
+    ma120: Optional[float] = None
+    # Volume moving averages  
     vol_ma5: Optional[float] = None
     vol_ma20: Optional[float] = None
-    vol_ma50: Optional[float] = None
+    vol_ma60: Optional[float] = None
+    vol_ma120: Optional[float] = None
+    # Daily change percentages
+    close_change_pct: Optional[float] = None  # % change from previous close
+    volume_change_pct: Optional[float] = None  # % change from previous volume
 
 
 class OHLCVRequest(BaseModel):

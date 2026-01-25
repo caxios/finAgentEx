@@ -7,12 +7,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import sys
 import os
+from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import routers
-from backend.routers import analysis, chart
+# Set EDGAR cache directory BEFORE importing edgar-related modules
+_edgar_cache = Path(__file__).parent.parent / '.edgar_cache'
+_edgar_cache.mkdir(parents=True, exist_ok=True)
+(_edgar_cache / '_tcache').mkdir(exist_ok=True)
+os.environ['EDGAR_LOCAL_DATA_DIR'] = str(_edgar_cache)
+os.environ['EDGAR_CACHE_DIR'] = str(_edgar_cache)
+
+# Import routers (fundamentals imports edgar)
+from backend.routers import analysis, chart, fundamentals
 
 app = FastAPI(
     title="Stock Analysis API",
@@ -32,6 +40,7 @@ app.add_middleware(
 # Register routers
 app.include_router(analysis.router)
 app.include_router(chart.router)
+app.include_router(fundamentals.router)
 
 
 @app.get("/")
@@ -43,7 +52,8 @@ async def root():
         "endpoints": {
             "analyze": "POST /api/analyze",
             "ohlcv": "GET /api/ohlcv?ticker=AAPL&period=6mo",
-            "news_by_date": "GET /api/news-by-date?ticker=AAPL&date=2025-01-20"
+            "news_by_date": "GET /api/news-by-date?ticker=AAPL&date=2025-01-20",
+            "fundamentals": "GET /api/fundamentals?ticker=AAPL&type=annual"
         }
     }
 

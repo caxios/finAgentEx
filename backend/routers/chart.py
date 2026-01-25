@@ -59,13 +59,21 @@ async def get_ohlcv(
                 error="No data available for this ticker"
             )
         
-        # Calculate Moving Averages
+        # Calculate Moving Averages for Price
         df['ma5'] = df['Close'].rolling(window=5).mean()
         df['ma20'] = df['Close'].rolling(window=20).mean()
-        df['ma50'] = df['Close'].rolling(window=50).mean()
+        df['ma60'] = df['Close'].rolling(window=60).mean()
+        df['ma120'] = df['Close'].rolling(window=120).mean()
+        
+        # Calculate Moving Averages for Volume
         df['vol_ma5'] = df['Volume'].rolling(window=5).mean()
         df['vol_ma20'] = df['Volume'].rolling(window=20).mean()
-        df['vol_ma50'] = df['Volume'].rolling(window=50).mean()
+        df['vol_ma60'] = df['Volume'].rolling(window=60).mean()
+        df['vol_ma120'] = df['Volume'].rolling(window=120).mean()
+        
+        # Calculate daily % changes
+        df['close_change_pct'] = df['Close'].pct_change() * 100
+        df['volume_change_pct'] = df['Volume'].pct_change() * 100
         
         # Convert to list of OHLCVItem
         ohlcv_data = []
@@ -80,10 +88,14 @@ async def get_ohlcv(
                 volume=float(row['Volume']),
                 ma5=round(float(row['ma5']), 2) if not pd.isna(row['ma5']) else None,
                 ma20=round(float(row['ma20']), 2) if not pd.isna(row['ma20']) else None,
-                ma50=round(float(row['ma50']), 2) if not pd.isna(row['ma50']) else None,
+                ma60=round(float(row['ma60']), 2) if not pd.isna(row['ma60']) else None,
+                ma120=round(float(row['ma120']), 2) if not pd.isna(row['ma120']) else None,
                 vol_ma5=round(float(row['vol_ma5']), 0) if not pd.isna(row['vol_ma5']) else None,
                 vol_ma20=round(float(row['vol_ma20']), 0) if not pd.isna(row['vol_ma20']) else None,
-                vol_ma50=round(float(row['vol_ma50']), 0) if not pd.isna(row['vol_ma50']) else None,
+                vol_ma60=round(float(row['vol_ma60']), 0) if not pd.isna(row['vol_ma60']) else None,
+                vol_ma120=round(float(row['vol_ma120']), 0) if not pd.isna(row['vol_ma120']) else None,
+                close_change_pct=round(float(row['close_change_pct']), 2) if not pd.isna(row['close_change_pct']) else None,
+                volume_change_pct=round(float(row['volume_change_pct']), 2) if not pd.isna(row['volume_change_pct']) else None,
             ))
         
         # Pre-fetch news for the ticker (for date matching on frontend)

@@ -276,163 +276,289 @@ def data_agent_node(state: AgentState) -> dict:
 
 def tech_analysis_node(state: AgentState) -> dict:
     """
-    Agent 4: Technical Analysis Agent
-    Analyzes charts using Gemini Vision.
+    Agent 4: Technical Analysis Agent (Enhanced)
+    Analyzes charts using Gemini + Multi-Timeframe Analysis (1wk, 1mo, 3mo, 6mo).
+    Uses strategy_model (gemini-2.5-pro) for better analysis.
     """
-    print("\n---> Agent 4: Technical Analysis (Gemini Vision)")
+    print("\n---> Agent 4: Technical Analysis (Multi-Timeframe)")
     
     chart_path = state.get('chart_path')
     ticker = state.get('ticker', 'UNKNOWN')
     ohlcv_data = state.get('ohlcv_data', {})
     
-    if not chart_path or not os.path.exists(chart_path):
-        print("      No chart available for analysis")
-        return {"technical_analysis": "Chart not available for technical analysis."}
+    # Define timeframes for analysis
+    timeframes = {
+        '1wk': '5d',    # 5 trading days
+        '1mo': '1mo',
+        '3mo': '3mo', 
+        '6mo': '6mo'
+    }
     
-    try:
-        # Convert chart to base64
-        image_base64 = image_to_base64(chart_path)
-        
-        # Create vision prompt
-        vision_prompt = f"""You are an expert technical analyst. Analyze this chart for {ticker} stock.
+    # Collect multi-timeframe data
+    tf_analysis = {}
+    print("      Fetching multi-timeframe data...")
+    
+    for tf_name, period in timeframes.items():
+        try:
+            df = fetch_single_ticker_data(ticker, period=period)
+            if df is not None and len(df) >= 2:
+                # Calculate metrics
+                price_change = (df['Close'].iloc[-1] / df['Close'].iloc[0] - 1) * 100
+                volume_avg = df['Volume'].mean()
+                volume_change = (df['Volume'].iloc[-1] / volume_avg - 1) * 100 if volume_avg > 0 else 0
+                volatility = df['Close'].pct_change().std() * 100
+                
+                # Price momentum (rate of change trend)
+                mid_idx = len(df) // 2
+                first_half_change = (df['Close'].iloc[mid_idx] / df['Close'].iloc[0] - 1) * 100 if mid_idx > 0 else 0
+                second_half_change = (df['Close'].iloc[-1] / df['Close'].iloc[mid_idx] - 1) * 100 if mid_idx > 0 else 0
+                momentum = "accelerating" if second_half_change > first_half_change else "decelerating"
+                
+                tf_analysis[tf_name] = {
+                    "price_change": round(price_change, 2),
+                    "volume_change_vs_avg": round(volume_change, 2),
+                    "volatility": round(volatility, 2),
+                    "momentum": momentum,
+                    "start_price": round(float(df['Close'].iloc[0]), 2),
+                    "end_price": round(float(df['Close'].iloc[-1]), 2),
+                    "high": round(float(df['High'].max()), 2),
+                    "low": round(float(df['Low'].min()), 2)
+                }
+                print(f"        {tf_name}: {price_change:+.2f}% (momentum: {momentum})")
+        except Exception as e:
+            print(f"        {tf_name}: Error - {e}")
+            tf_analysis[tf_name] = {"error": str(e)}
+    
+    # Build comprehensive prompt
+    tf_summary = "\n".join([
+        f"- {tf}: Price {data.get('price_change', 'N/A'):+.1f}%, "
+        f"Volume vs Avg: {data.get('volume_change_vs_avg', 'N/A'):+.1f}%, "
+        f"Volatility: {data.get('volatility', 'N/A'):.1f}%, "
+        f"Momentum: {data.get('momentum', 'N/A')}"
+        for tf, data in tf_analysis.items() if 'error' not in data
+    ])
+    
+    vision_prompt = f"""You are a senior technical analyst. Perform comprehensive multi-timeframe analysis for {ticker}.
 
-Current Data Summary:
+## CURRENT DATA
 - Current Price: ${ohlcv_data.get('current_price', 'N/A')}
 - Period Change: {ohlcv_data.get('period_change_pct', 'N/A')}%
-- Period High/Low: ${ohlcv_data.get('period_high', 'N/A')} / ${ohlcv_data.get('period_low', 'N/A')}
 
-Analyze the chart and provide:
-1. **Trend Analysis**: Overall trend direction (bullish/bearish/sideways)
-2. **Support/Resistance**: Key price levels identified
-3. **Technical Indicators**: Analysis of RSI, MACD, and volume patterns
-4. **Pattern Recognition**: Any chart patterns (head & shoulders, double top/bottom, etc.)
-5. **Technical Signal**: BUY, SELL, or HOLD recommendation with reasoning
+## MULTI-TIMEFRAME ANALYSIS
+{tf_summary}
 
-Be specific about price levels and percentages. Focus on actionable insights."""
+## ANALYSIS REQUIRED
+Based on the chart and timeframe data:
 
-        # Invoke Gemini Vision
-        response = vision_model.invoke([
-            HumanMessage(content=[
-                {"type": "text", "text": vision_prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
+1. **Timeframe Momentum Comparison**:
+   - Compare momentum across 1wk vs 1mo vs 3mo vs 6mo
+   - Is short-term momentum aligned with long-term trend?
+   - Any divergence signals?
+
+2. **Trend Strength by Timeframe**:
+   - 1 Week: Short-term direction and strength
+   - 1 Month: Medium-term trend
+   - 3 Months: Intermediate trend
+   - 6 Months: Long-term trend
+
+3. **Volume Analysis**:
+   - Is volume confirming price movement in each timeframe?
+   - Volume momentum trend
+
+4. **Key Price Levels**:
+   - Major support and resistance across timeframes
+   - Price position relative to these levels
+
+5. **Technical Signal**: 
+   - BUY / SELL / HOLD recommendation
+   - Timeframe for the recommendation
+   - Risk level and stop-loss suggestion
+
+Be specific about momentum changes and trend alignment across timeframes."""
+
+    try:
+        # Use chart if available
+        if chart_path and os.path.exists(chart_path):
+            image_base64 = image_to_base64(chart_path)
+            response = strategy_model.invoke([
+                HumanMessage(content=[
+                    {"type": "text", "text": vision_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
+                ])
             ])
-        ])
+        else:
+            # Text-only analysis
+            response = strategy_model.invoke([HumanMessage(content=vision_prompt)])
         
         analysis = response.content
         print(f"      Technical analysis completed ({len(analysis)} chars)")
         
     except Exception as e:
-        print(f"      Vision analysis failed: {e}")
-        analysis = f"Technical analysis failed: {e}. Using OHLCV data only."
-        
-        # Fallback to text-based analysis
-        if ohlcv_data:
-            change = ohlcv_data.get('period_change_pct', 0)
-            if change > 5:
-                analysis += f"\nBased on data: {ticker} shows bullish momentum with +{change}% gain."
-            elif change < -5:
-                analysis += f"\nBased on data: {ticker} shows bearish pressure with {change}% loss."
-            else:
-                analysis += f"\nBased on data: {ticker} is consolidating with {change}% change."
+        print(f"      Technical analysis failed: {e}")
+        analysis = f"Technical analysis error: {e}\n\nTimeframe Data:\n{tf_summary}"
     
     return {"technical_analysis": analysis}
 
 
 def sentiment_agent_node(state: AgentState) -> dict:
     """
-    Agent 5: Sentiment Analysis Agent
-    Analyzes text from News (Agent 1) and Blogs (Agent 2).
+    Agent 5: Sentiment Analysis Agent (Enhanced)
+    Multi-Timeframe sentiment analysis: 1wk, 1mo, 3mo, 6mo.
+    Uses yfinance for recent news + Tavily for historical search.
+    Uses strategy_model (gemini-2.5-pro) for analysis.
     """
-    print("\n---> Agent 5: Sentiment Analysis")
+    print("\n---> Agent 5: Sentiment Analysis (Multi-Timeframe)")
     
     ticker = state.get('ticker', 'UNKNOWN')
     news_data = state.get('news_data', [])
     blog_data = state.get('blog_data', [])
     
-    # Combine all text sources
-    text_sources = []
+    # Organize sentiment data by timeframe
+    timeframe_data = {
+        '1wk': {'news': [], 'tavily': []},
+        '1mo': {'news': [], 'tavily': []},
+        '3mo': {'news': [], 'tavily': []},
+        '6mo': {'news': [], 'tavily': []}
+    }
     
-    # Add news content
-    for news in news_data[:10]:
-        text_sources.append({
-            "source": "News",
-            "title": news.get('title', ''),
-            "content": news.get('summary', '')
-        })
+    print("      Organizing news by timeframe...")
     
-    # Add blog content
+    # Categorize existing news and blogs (recent - within ~30 days)
+    for news in news_data[:15]:
+        timeframe_data['1wk']['news'].append(news)  # Recent news covers 1wk and 1mo
+        timeframe_data['1mo']['news'].append(news)
+    
     for blog in blog_data[:5]:
-        text_sources.append({
-            "source": blog.get('source', 'Blog'),
-            "title": blog.get('title', ''),
-            "content": blog.get('content', '')[:5000]  # Limit content length
-        })
+        timeframe_data['1wk']['tavily'].append(blog)
+        timeframe_data['1mo']['tavily'].append(blog)
     
-    if not text_sources:
-        print("      No text sources available for sentiment analysis")
-        return {
-            "sentiment_analysis": {
-                "overall_sentiment": "NEUTRAL",
-                "confidence": 0.3,
-                "news_sentiment": "Unknown",
-                "social_sentiment": "Unknown",
-                "key_themes": [],
-                "summary": "Insufficient data for sentiment analysis."
-            }
-        }
+    print(f"        Recent: {len(news_data)} news, {len(blog_data)} blogs")
     
-    # Build prompt for sentiment analysis
-    sources_text = "\n\n".join([
-        f"[{s['source']}] {s['title']}\n{s['content']}"
-        for s in text_sources
-    ])
+    # Use Tavily for historical sentiment (3mo, 6mo)
+    if tavily_client:
+        historical_queries = [
+            ('3mo', f"{ticker} stock news analysis Q3 Q4 2024"),
+            ('3mo', f"{ticker} earnings performance last quarter"),
+            ('6mo', f"{ticker} stock news sentiment 2024 review"),
+            ('6mo', f"{ticker} company performance analysis 6 months")
+        ]
+        
+        print("      Fetching historical sentiment via Tavily...")
+        for tf, query in historical_queries:
+            try:
+                response = tavily_client.search(
+                    query=query,
+                    search_depth="advanced",
+                    max_results=3
+                )
+                for result in response.get('results', []):
+                    timeframe_data[tf]['tavily'].append({
+                        'title': result.get('title', ''),
+                        'content': result.get('content', '')[:2000],
+                        'source': result.get('url', '').split('/')[2] if result.get('url') else 'Web'
+                    })
+            except Exception as e:
+                print(f"        Tavily search failed for {tf}: {e}")
+        
+        print(f"        3mo: {len(timeframe_data['3mo']['tavily'])} articles")
+        print(f"        6mo: {len(timeframe_data['6mo']['tavily'])} articles")
+    else:
+        print("      Tavily not available for historical search")
     
-    sentiment_prompt = f"""Analyze the sentiment of the following news and social content about {ticker}:
+    # Build comprehensive prompt for multi-timeframe analysis
+    def format_timeframe_content(tf_name: str, data: dict) -> str:
+        items = []
+        for news in data.get('news', [])[:5]:
+            items.append(f"  - [News] {news.get('title', 'No title')}")
+        for tavily in data.get('tavily', [])[:3]:
+            items.append(f"  - [{tavily.get('source', 'Web')}] {tavily.get('title', '')[:100]}")
+        return "\n".join(items) if items else "  - No data available"
+    
+    content_summary = ""
+    for tf in ['1wk', '1mo', '3mo', '6mo']:
+        content_summary += f"\n### {tf} Content:\n{format_timeframe_content(tf, timeframe_data[tf])}\n"
+    
+    sentiment_prompt = f"""You are a senior market sentiment analyst. Analyze the market sentiment for {ticker} across multiple timeframes.
 
-{sources_text}
+## NEWS AND SOCIAL CONTENT BY TIMEFRAME
+{content_summary}
 
-Provide a structured analysis:
-1. Overall Sentiment: POSITIVE, NEGATIVE, NEUTRAL, or MIXED
-2. Confidence: Your confidence level (0.0 to 1.0)
-3. News Sentiment: Sentiment from news sources specifically
-4. Social Sentiment: Sentiment from blogs/social media
-5. Key Themes: Main topics being discussed (list 3-5)
-6. Summary: Brief 2-3 sentence summary of the sentiment landscape
+## DETAILED CONTENT FOR ANALYSIS
+### Recent News (1 Week - 1 Month):
+{chr(10).join([f"- {n.get('title', '')}: {n.get('summary', '')[:300]}" for n in news_data[:8]])}
 
-Respond in JSON format."""
+### Blog/Social Content:
+{chr(10).join([f"- {b.get('title', '')}: {b.get('content', '')[:300]}" for b in blog_data[:4]])}
+
+## ANALYSIS REQUIRED
+Provide a comprehensive multi-timeframe sentiment analysis:
+
+1. **Sentiment by Timeframe** (POSITIVE/NEGATIVE/NEUTRAL/MIXED for each):
+   - 1 Week sentiment and key drivers
+   - 1 Month sentiment and key drivers
+   - 3 Month sentiment and key drivers  
+   - 6 Month sentiment and key drivers
+
+2. **Sentiment Momentum**:
+   - Is sentiment improving or deteriorating over time?
+   - Any recent sentiment shifts?
+   - Sentiment trend direction (accelerating positive/negative, stabilizing, reversing)
+
+3. **Key Themes by Timeframe**:
+   - What topics dominate each period?
+   - Any emerging concerns or catalysts?
+
+4. **Overall Sentiment Score**: 
+   - Combined sentiment (POSITIVE/NEGATIVE/NEUTRAL/MIXED)
+   - Confidence level (0.0 to 1.0)
+
+5. **Summary**: 2-3 sentences on the overall sentiment landscape and its trajectory.
+
+Respond in JSON format with the following structure:
+{{
+    "timeframe_sentiment": {{
+        "1wk": {{"sentiment": "...", "key_driver": "..."}},
+        "1mo": {{"sentiment": "...", "key_driver": "..."}},
+        "3mo": {{"sentiment": "...", "key_driver": "..."}},
+        "6mo": {{"sentiment": "...", "key_driver": "..."}}
+    }},
+    "sentiment_momentum": "...",
+    "momentum_direction": "...",
+    "overall_sentiment": "...",
+    "confidence": 0.0,
+    "key_themes": [],
+    "summary": "..."
+}}"""
 
     try:
-        response = model.invoke([HumanMessage(content=sentiment_prompt)])
-        
-        # Parse response
+        response = strategy_model.invoke([HumanMessage(content=sentiment_prompt)])
         content = response.content
         
         # Try to extract JSON from response
-        import re
         json_match = re.search(r'\{[\s\S]*\}', content)
         if json_match:
             sentiment_result = json.loads(json_match.group())
         else:
-            # Fallback parsing
             sentiment_result = {
+                "timeframe_sentiment": {},
+                "sentiment_momentum": "Unknown",
                 "overall_sentiment": "NEUTRAL",
                 "confidence": 0.5,
-                "news_sentiment": "See analysis",
-                "social_sentiment": "See analysis",
                 "key_themes": [],
                 "summary": content[:500]
             }
         
-        print(f"      Sentiment: {sentiment_result.get('overall_sentiment', 'N/A')}")
+        print(f"      Overall Sentiment: {sentiment_result.get('overall_sentiment', 'N/A')}")
+        print(f"        Momentum: {sentiment_result.get('sentiment_momentum', 'N/A')}")
         print(f"        Confidence: {sentiment_result.get('confidence', 'N/A')}")
         
     except Exception as e:
         print(f"      Sentiment analysis failed: {e}")
         sentiment_result = {
+            "timeframe_sentiment": {},
+            "sentiment_momentum": "Unknown",
             "overall_sentiment": "NEUTRAL",
             "confidence": 0.3,
-            "news_sentiment": "Analysis failed",
-            "social_sentiment": "Analysis failed",
             "key_themes": [],
             "summary": f"Sentiment analysis failed: {e}"
         }
