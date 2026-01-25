@@ -6,7 +6,7 @@ API Endpoints for "My Portfolios" feature.
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 from typing import List, Optional
-from backend import portfolio_db, portfolio_analyser
+from backend import portfolio_db, portfolio_analyser, portfolio_news
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
@@ -87,3 +87,9 @@ async def analyze_portfolio(request: AnalysisRequest):
         return {"success": False, "error": result["error"]}
         
     return {"success": True, "data": result}
+    
+@router.get("/categories/{category_id}/news")
+async def get_portfolio_news(category_id: int, limit: int = 50):
+    """Get aggregated news for all stocks in the category"""
+    news_items = portfolio_news.fetch_portfolio_news(category_id)
+    return {"category_id": category_id, "news": news_items[:limit]}

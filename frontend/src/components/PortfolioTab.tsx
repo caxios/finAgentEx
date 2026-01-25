@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import PortfolioChart from './PortfolioChart';
+import PortfolioNews from './PortfolioNews';
 
 const API_BASE = "http://localhost:8000/api/portfolio";
 
@@ -265,6 +266,9 @@ export default function PortfolioTab() {
                                 </div>
                             </div>
                         )}
+
+                        {/* News Section */}
+                        <PortfolioNews categoryId={selectedCategory.id} />
 
                     </>
                 ) : (
