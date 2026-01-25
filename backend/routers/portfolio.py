@@ -89,7 +89,7 @@ async def analyze_portfolio(request: AnalysisRequest):
     return {"success": True, "data": result}
     
 @router.get("/categories/{category_id}/news")
-async def get_portfolio_news(category_id: int, limit: int = 50):
+async def get_portfolio_news(category_id: int, limit: int = 50, date: Optional[str] = None):
     """Get aggregated news for all stocks in the category"""
-    news_items = portfolio_news.fetch_portfolio_news(category_id)
+    news_items = portfolio_news.fetch_portfolio_news(category_id, date=date)
     return {"category_id": category_id, "news": news_items[:limit]}

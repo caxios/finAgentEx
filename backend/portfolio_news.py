@@ -7,15 +7,19 @@ Implements source tagging (related_tickers) and deduplication.
 from typing import List, Dict, Set
 from datetime import datetime
 from backend import portfolio_db
-from data_tools import fetch_news_for_ticker
+from typing import List, Dict, Set
+from datetime import datetime
+from backend import portfolio_db
+from data_tools import fetch_news_for_ticker, fetch_news_for_date
 
-def fetch_portfolio_news(category_id: int, count_per_ticker: int = 10) -> List[Dict]:
+def fetch_portfolio_news(category_id: int, count_per_ticker: int = 10, date: str = None) -> List[Dict]:
     """
     Fetch news for all tickers in the category, merge, and deduplicate.
     
     Args:
         category_id: ID of the portfolio category
         count_per_ticker: Number of news items to fetch per ticker
+        date: Optional date filter (YYYY-MM-DD)
         
     Returns:
         List of news items sorted by date (newest first)
@@ -32,8 +36,12 @@ def fetch_portfolio_news(category_id: int, count_per_ticker: int = 10) -> List[D
     portfolio_tickers_set = set(tickers)
     
     for ticker in tickers:
-        # fetch_news_for_ticker returns list of dicts with 'tickers': [ticker]
-        ticker_news = fetch_news_for_ticker(ticker, count=count_per_ticker)
+        if date:
+            # Date specific fetch - Fetch 5 items as requested
+            ticker_news = fetch_news_for_date(ticker, date, count=5)
+        else:
+            # fetch_news_for_ticker returns list of dicts with 'tickers': [ticker]
+            ticker_news = fetch_news_for_ticker(ticker, count=count_per_ticker)
         
         for item in ticker_news:
             news_id = item['id']

@@ -16,23 +16,28 @@ interface PortfolioNewsProps {
 }
 
 export default function PortfolioNews({ categoryId }: PortfolioNewsProps) {
-    const [news, setNews] = useState<NewsItem[]>([]);
+    const [news, setNews] = useState<NewsItem[]>([]); // Accumulates all fetched news
     const [loading, setLoading] = useState(false);
-    const [selectedDate, setSelectedDate] = useState<string>('All');
-    const [availableDates, setAvailableDates] = useState<string[]>([]);
+    const [selectedDate, setSelectedDate] = useState<string>('');
 
-    useEffect(() => {
-        fetchNews();
-    }, [categoryId]);
+    const mergeNews = (newItems: NewsItem[]) => {
+        setNews(prev => {
+            const existingIds = new Set(prev.map(n => n.id));
+            const unique = newItems.filter(n => !existingIds.has(n.id));
+            if (unique.length === 0) return prev;
+            // Sort by date desc
+            return [...prev, ...unique].sort((a, b) => b.pubDate.localeCompare(a.pubDate));
+        });
+    };
 
-    const fetchNews = async () => {
+    const fetchLatestNews = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`http://localhost:8000/api/portfolio/categories/${categoryId}/news?limit=50`);
+            // Default latest fetch (replaces current state)
+            const res = await fetch(`http://localhost:8000/api/portfolio/categories/${categoryId}/news?limit=100`);
             const data = await res.json();
             if (data.news) {
                 setNews(data.news);
-                extractDates(data.news);
             }
         } catch (err) {
             console.error("Failed to fetch news", err);
@@ -41,42 +46,73 @@ export default function PortfolioNews({ categoryId }: PortfolioNewsProps) {
         }
     };
 
-    const extractDates = (items: NewsItem[]) => {
-        const dates = new Set<string>(items.map(item => item.pubDate).filter(d => d));
-        setAvailableDates(Array.from(dates).sort().reverse());
+    const fetchDateNews = async (date: string) => {
+        setLoading(true);
+        try {
+            const res = await fetch(`http://localhost:8000/api/portfolio/categories/${categoryId}/news?limit=100&date=${date}`);
+            const data = await res.json();
+            if (data.news) {
+                mergeNews(data.news);
+            }
+        } catch (err) {
+            console.error("Failed to fetch date news", err);
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const filteredNews = selectedDate === 'All'
-        ? news
-        : news.filter(item => item.pubDate === selectedDate);
+    // Initial Load (Latest News)
+    useEffect(() => {
+        fetchLatestNews();
+    }, [categoryId]);
+
+    // Fetch when Date Selected
+    useEffect(() => {
+        if (selectedDate) {
+            fetchDateNews(selectedDate);
+        }
+    }, [selectedDate, categoryId]);
+
+    // View Filter: If date selected, show only that date. Else show all history.
+    const displayedNews = selectedDate
+        ? news.filter(n => n.pubDate === selectedDate)
+        : news;
 
     return (
         <div className="mt-8 bg-white rounded-lg shadow-md border border-gray-200 overflow-hidden">
-            {/* 2.1 Control Bar */}
+            {/* Control Bar */}
             <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
                 <h3 className="text-lg font-bold flex items-center gap-2">
                     📰 Portfolio News
                     <span className="text-xs font-normal text-gray-500 bg-gray-200 px-2 py-0.5 rounded-full">
-                        {news.length} Articles
+                        {displayedNews.length} / {news.length}
                     </span>
                 </h3>
 
-                <div className="flex gap-2">
-                    {/* Date Filter */}
-                    <select
-                        className="border rounded px-3 py-1.5 text-sm bg-white"
+                <div className="flex gap-2 items-center">
+                    <span className="text-sm text-gray-500">Filter by Date:</span>
+                    {/* Date Picker */}
+                    <input
+                        type="date"
+                        className="border rounded px-3 py-1.5 text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none"
                         value={selectedDate}
                         onChange={(e) => setSelectedDate(e.target.value)}
-                    >
-                        <option value="All">All Dates</option>
-                        {availableDates.map(date => (
-                            <option key={date} value={date}>{date}</option>
-                        ))}
-                    </select>
+                    />
 
-                    {/* Refresh Button */}
+                    {selectedDate && (
+                        <button
+                            onClick={() => setSelectedDate('')}
+                            className="text-xs text-red-500 hover:text-red-700 underline"
+                        >
+                            Clear
+                        </button>
+                    )}
+
+                    <div className="bg-gray-300 w-px h-6 mx-2"></div>
+
+                    {/* Refresh Button - Resets to Latest */}
                     <button
-                        onClick={fetchNews}
+                        onClick={() => { setSelectedDate(''); fetchLatestNews(); }}
                         disabled={loading}
                         className="bg-blue-600 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1 transition-colors"
                     >
@@ -90,19 +126,23 @@ export default function PortfolioNews({ categoryId }: PortfolioNewsProps) {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                             </svg>
                         )}
-                        Refresh
+                        Reset
                     </button>
                 </div>
             </div>
 
-            {/* 2.2 News Card Component */}
+            {/* News Card Component */}
             <div className="divide-y divide-gray-100 max-h-[600px] overflow-y-auto bg-white">
-                {loading && news.length === 0 ? (
+                {loading && displayedNews.length === 0 ? (
                     <div className="p-8 text-center text-gray-500">Loading portfolio news...</div>
-                ) : filteredNews.length === 0 ? (
-                    <div className="p-8 text-center text-gray-500">No news found for this selection.</div>
+                ) : displayedNews.length === 0 ? (
+                    <div className="p-8 text-center text-gray-500">
+                        {selectedDate
+                            ? `No news found for ${selectedDate}.`
+                            : "No news articles found."}
+                    </div>
                 ) : (
-                    filteredNews.map(item => (
+                    displayedNews.map(item => (
                         <article key={item.id} className="p-4 hover:bg-blue-50/30 transition-colors">
                             {/* Header */}
                             <div className="mb-2">

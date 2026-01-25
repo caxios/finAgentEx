@@ -21,6 +21,14 @@ CACHE_ENABLED = False
 # Try multiple import strategies for different execution contexts
 import sys
 
+# Try to import Tavily
+try:
+    from tavily import TavilyClient
+    TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
+    tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
+except ImportError:
+    tavily_client = None
+
 # Strategy 1: Direct import (works when running from project root)
 try:
     from backend.cache import (
@@ -324,6 +332,70 @@ def fetch_news_for_ticker(ticker: str, count: int = 25) -> List[dict]:
             if cached_news:
                 print(f"[!] Using cached news due to error ({len(cached_news)} articles)")
                 return cached_news[:count]
+        return []
+
+
+def fetch_news_for_date(ticker: str, target_date: str, count: int = 5) -> List[dict]:
+    """
+    Fetch news for a specific date. 
+    Tries YFinance first (recent), then Tavily (historical search).
+    """
+    ticker = ticker.upper()
+    news_list = []
+    
+    # Step 1: Check YFinance latest (in case date is recent)
+    try:
+        # Fetch a bit more to ensure we cover the date if mixed with other news
+        latest = fetch_news_for_ticker(ticker, count=max(20, count * 2))
+        for item in latest:
+            if item.get('pubDate') == target_date:
+                news_list.append(item)
+                if len(news_list) >= count:
+                    break
+    except:
+        pass
+            
+    if news_list:
+        print(f"[OK] Found {len(news_list)} articles in YFinance/Cache for {target_date}")
+        return news_list
+        
+    # Step 2: Tavily Fallback
+    if not tavily_client:
+        print("[!] Tavily not configured, cannot search historical news")
+        return []
+        
+    try:
+        query = f"{ticker} stock news {target_date}"
+        print(f"[*] Searching Tavily: {query}")
+        response = tavily_client.search(
+            query=query,
+            search_depth="advanced",
+            max_results=count
+        )
+        
+        tavily_results = response.get('results', [])
+        for result in tavily_results:
+            # Generate deterministic ID
+            news_id = f"tavily_{ticker}_{target_date}_{hash(result.get('url', ''))}"
+            
+            news_list.append({
+                'id': news_id,
+                'title': result.get('title', 'No title'),
+                'summary': result.get('content', '')[:500],
+                'pubDate': target_date,
+                'url': result.get('url', ''),
+                'tickers': [ticker]
+            })
+            
+        # Save to Cache
+        if CACHE_ENABLED and news_list:
+            save_news_cache(ticker, news_list)
+            
+        print(f"[OK] Found {len(news_list)} articles via Tavily")
+        return news_list
+        
+    except Exception as e:
+        print(f"[X] Tavily search failed: {e}")
         return []
 
 
