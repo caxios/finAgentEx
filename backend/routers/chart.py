@@ -124,6 +124,21 @@ async def get_ohlcv(
 # Need to import pandas for isna check
 import pandas as pd
 
+# Import cache for Tavily news storage
+try:
+    from backend.cache import get_news_cache, save_news_cache
+    NEWS_CACHE_ENABLED = True
+except ImportError:
+    try:
+        import sys
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        from cache import get_news_cache, save_news_cache
+        NEWS_CACHE_ENABLED = True
+    except ImportError:
+        NEWS_CACHE_ENABLED = False
+
 
 @router.get("/news-by-date", response_model=NewsByDateResponse)
 async def get_news_by_date(
@@ -133,6 +148,7 @@ async def get_news_by_date(
     """
     Get news for a specific date.
     Uses yfinance for recent news (30 days) and Tavily for older dates.
+    Caches Tavily results for future requests.
     """
     ticker = ticker.upper().strip()
     
@@ -151,6 +167,29 @@ async def get_news_by_date(
     source = "yfinance"
     
     try:
+        # Check cache first for this specific date
+        if NEWS_CACHE_ENABLED:
+            cached_news = get_news_cache(ticker, limit=100)
+            for news in cached_news:
+                if news.get('pubDate') == date:
+                    news_items.append(NewsItem(
+                        title=news.get('title', 'No title'),
+                        summary=news.get('summary', ''),
+                        url=news.get('url'),
+                        source='Cached',
+                        pubDate=date
+                    ))
+            
+            if news_items:
+                print(f"[OK] {ticker} news for {date} (from cache, {len(news_items)} articles)")
+                return NewsByDateResponse(
+                    ticker=ticker,
+                    date=date,
+                    news=news_items,
+                    source="cache",
+                    success=True
+                )
+        
         if days_ago <= 30:
             # Use yfinance for recent news
             news_list = fetch_news_for_ticker(ticker, count=50)
@@ -177,14 +216,33 @@ async def get_news_by_date(
                     max_results=5
                 )
                 
+                tavily_news_for_cache = []
+                
                 for result in response.get('results', []):
-                    news_items.append(NewsItem(
+                    news_item = NewsItem(
                         title=result.get('title', 'No title'),
                         summary=result.get('content', '')[:500],
                         url=result.get('url'),
                         source=result.get('url', '').split('/')[2] if result.get('url') else 'Web',
                         pubDate=date
-                    ))
+                    )
+                    news_items.append(news_item)
+                    
+                    # Prepare for cache
+                    tavily_news_for_cache.append({
+                        'id': f"tavily_{ticker}_{date}_{len(tavily_news_for_cache)}",
+                        'title': result.get('title', 'No title'),
+                        'summary': result.get('content', '')[:500],
+                        'pubDate': date,
+                        'url': result.get('url', ''),
+                        'tickers': [ticker]
+                    })
+                
+                # Save Tavily results to cache
+                if NEWS_CACHE_ENABLED and tavily_news_for_cache:
+                    save_news_cache(ticker, tavily_news_for_cache)
+                    print(f"[Cache] Saved {len(tavily_news_for_cache)} Tavily news for {ticker} on {date}")
+                    
             except Exception as e:
                 print(f"Tavily search failed: {e}")
         
@@ -206,3 +264,4 @@ async def get_news_by_date(
             success=False,
             error=str(e)
         )
+

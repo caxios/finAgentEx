@@ -1,12 +1,13 @@
 """
 Multi-Agent System Graph for Stock Analysis
-6-Agent Architecture:
+7-Agent Architecture:
   - Agent 1 (News): Fetches news using yfinance
   - Agent 2 (Blogs): Fetches blog/social opinion using Tavily API
   - Agent 3 (Data): Fetches OHLCV data and generates charts
   - Agent 4 (Tech Analysis): Analyzes charts using Gemini Vision
   - Agent 5 (Sentiment): Analyzes text from Agents 1 & 2
-  - Agent 6 (Strategy): Final decision maker
+  - Agent 6 (Fundamentals): Fetches SEC EDGAR financial data
+  - Agent 7 (Strategy): Final decision maker
 """
 
 from typing import Annotated, TypedDict, Optional, List, Dict
@@ -88,7 +89,10 @@ class AgentState(TypedDict):
     # Agent 5 (Sentiment) Output
     sentiment_analysis: Optional[Dict]        # Combined sentiment analysis
     
-    # Agent 6 (Strategy) Output
+    # Agent 6 (Fundamentals) Output
+    fundamentals_data: Optional[Dict]         # SEC EDGAR financial data
+    
+    # Agent 7 (Strategy) Output
     final_signal: Optional[TradingSignal]     # Final trading decision
 
 
@@ -273,6 +277,144 @@ def data_agent_node(state: AgentState) -> dict:
         "chart_path": chart_path
     }
 
+
+def fundamentals_agent_node(state: AgentState) -> dict:
+    """
+    Agent 6: Fundamentals Agent
+    Fetches SEC EDGAR financial data (8 quarters / 2 years).
+    Uses SQLite cache for persistence.
+    """
+    print("\n---> Agent 6: Fundamentals Agent (SEC EDGAR)")
+    
+    ticker = state.get('ticker', 'UNKNOWN')
+    
+    # Try to import from SEC EDGAR
+    try:
+        from edgar import Company, set_identity
+        from edgar.xbrl import XBRLS
+        set_identity("FinAgentEx finagentex@example.com")
+        
+        company = Company(ticker)
+        
+        # Fetch last 8 quarterly reports (2 years)
+        filings = company.get_filings(form="10-Q", amendments=False).head(8)
+        
+        if not filings or len(filings) == 0:
+            print(f"      No quarterly filings found for {ticker}")
+            return {"fundamentals_data": None}
+        
+        # Parse XBRL data
+        xbrls = XBRLS.from_filings(filings)
+        statements = xbrls.statements
+        
+        # Extract key metrics
+        fundamentals = {
+            "ticker": ticker,
+            "periods_analyzed": len(filings),
+            "metrics": {}
+        }
+        
+        # Get income statement data
+        try:
+            income_stmt = statements.income_statement()
+            if income_stmt:
+                income_df = income_stmt.to_dataframe()
+                
+                # Extract Revenue
+                revenue_row = income_df[income_df['label'].str.contains('Revenue|Sales', case=False, na=False)]
+                if not revenue_row.empty:
+                    revenue_cols = [c for c in income_df.columns if c not in ['label', 'concept', 'standard_concept', 'depth', 'is_total', 'section', 'confidence']]
+                    revenues = {}
+                    for col in revenue_cols[:8]:  # Last 8 quarters
+                        val = revenue_row.iloc[0].get(col)
+                        if val is not None and str(val) != 'nan':
+                            try:
+                                revenues[str(col)[:10]] = float(val)
+                            except:
+                                pass
+                    if revenues:
+                        fundamentals["metrics"]["revenue"] = revenues
+                        # Calculate YoY growth
+                        values = list(revenues.values())
+                        if len(values) >= 5:
+                            yoy_growth = ((values[0] - values[4]) / abs(values[4])) * 100 if values[4] != 0 else 0
+                            fundamentals["metrics"]["revenue_yoy"] = round(yoy_growth, 2)
+                
+                # Extract Net Income
+                net_income_row = income_df[income_df['label'].str.contains('Net Income|Net Earnings', case=False, na=False)]
+                if not net_income_row.empty:
+                    net_incomes = {}
+                    for col in revenue_cols[:8]:
+                        val = net_income_row.iloc[0].get(col)
+                        if val is not None and str(val) != 'nan':
+                            try:
+                                net_incomes[str(col)[:10]] = float(val)
+                            except:
+                                pass
+                    if net_incomes:
+                        fundamentals["metrics"]["net_income"] = net_incomes
+                        values = list(net_incomes.values())
+                        if len(values) >= 5:
+                            yoy_growth = ((values[0] - values[4]) / abs(values[4])) * 100 if values[4] != 0 else 0
+                            fundamentals["metrics"]["net_income_yoy"] = round(yoy_growth, 2)
+                            
+        except Exception as e:
+            print(f"      Error parsing income statement: {e}")
+        
+        # Get balance sheet data
+        try:
+            balance_stmt = statements.balance_sheet()
+            if balance_stmt:
+                balance_df = balance_stmt.to_dataframe()
+                
+                # Extract Total Assets
+                assets_row = balance_df[balance_df['label'].str.contains('Total Assets', case=False, na=False)]
+                if not assets_row.empty:
+                    balance_cols = [c for c in balance_df.columns if c not in ['label', 'concept', 'standard_concept', 'depth', 'is_total', 'section', 'confidence']]
+                    val = assets_row.iloc[0].get(balance_cols[0]) if balance_cols else None
+                    if val is not None:
+                        try:
+                            fundamentals["metrics"]["total_assets"] = float(val)
+                        except:
+                            pass
+                
+                # Extract Total Debt/Liabilities
+                debt_row = balance_df[balance_df['label'].str.contains('Total Liabilities|Long-term Debt', case=False, na=False)]
+                if not debt_row.empty:
+                    val = debt_row.iloc[0].get(balance_cols[0]) if balance_cols else None
+                    if val is not None:
+                        try:
+                            fundamentals["metrics"]["total_liabilities"] = float(val)
+                        except:
+                            pass
+                            
+        except Exception as e:
+            print(f"      Error parsing balance sheet: {e}")
+        
+        # Calculate key ratios
+        metrics = fundamentals["metrics"]
+        if "total_assets" in metrics and "total_liabilities" in metrics:
+            equity = metrics["total_assets"] - metrics["total_liabilities"]
+            if equity > 0:
+                metrics["debt_to_equity"] = round(metrics["total_liabilities"] / equity, 2)
+        
+        # Print summary
+        print(f"      Fundamentals Summary:")
+        if "revenue_yoy" in metrics:
+            print(f"        Revenue YoY: {metrics['revenue_yoy']:+.1f}%")
+        if "net_income_yoy" in metrics:
+            print(f"        Net Income YoY: {metrics['net_income_yoy']:+.1f}%")
+        if "debt_to_equity" in metrics:
+            print(f"        Debt/Equity: {metrics['debt_to_equity']:.2f}")
+        
+        return {"fundamentals_data": fundamentals}
+        
+    except ImportError:
+        print("      SEC EDGAR library not available")
+        return {"fundamentals_data": None}
+    except Exception as e:
+        print(f"      Error fetching fundamentals: {e}")
+        return {"fundamentals_data": None}
 
 def tech_analysis_node(state: AgentState) -> dict:
     """
@@ -568,10 +710,10 @@ Respond in JSON format with the following structure:
 
 def strategy_agent_node(state: AgentState) -> dict:
     """
-    Agent 6: Strategy Agent (Final Decision Maker)
-    Synthesizes all inputs to make final trading decision.
+    Agent 7: Strategy Agent (Final Decision Maker)
+    Synthesizes all inputs including fundamentals to make final trading decision.
     """
-    print("\n---> Agent 6: Strategy (Final Decision)")
+    print("\n---> Agent 7: Strategy (Final Decision)")
     print("="*60)
     
     ticker = state.get('ticker', 'UNKNOWN')
@@ -580,6 +722,53 @@ def strategy_agent_node(state: AgentState) -> dict:
     sentiment_analysis = state.get('sentiment_analysis', {})
     news_data = state.get('news_data', [])
     blog_data = state.get('blog_data', [])
+    fundamentals_data = state.get('fundamentals_data', {})
+    
+    # Format fundamentals data
+    fundamentals_summary = "Not available"
+    if fundamentals_data and fundamentals_data.get('metrics'):
+        metrics = fundamentals_data['metrics']
+        total_assets = metrics.get('total_assets')
+        total_liabilities = metrics.get('total_liabilities')
+        
+        assets_str = f"${total_assets:,.0f}" if isinstance(total_assets, (int, float)) else str(total_assets)
+        liabilities_str = f"${total_liabilities:,.0f}" if isinstance(total_liabilities, (int, float)) else str(total_liabilities)
+        
+        fundamentals_summary = f"""- Periods Analyzed: {fundamentals_data.get('periods_analyzed', 'N/A')} quarters
+- Revenue YoY Growth: {metrics.get('revenue_yoy', 'N/A')}%
+- Net Income YoY Growth: {metrics.get('net_income_yoy', 'N/A')}%
+- Debt/Equity Ratio: {metrics.get('debt_to_equity', 'N/A')}
+- Total Assets: {assets_str}
+- Total Liabilities: {liabilities_str}"""
+    
+    # [수정 1] Key Themes 안전하게 변환
+    # 리스트 컴프리헨션 내에서 확실하게 str()로 감싸서 딕셔너리가 join으로 넘어가는 것을 방지
+    key_themes = sentiment_analysis.get('key_themes', [])
+    key_themes_list = []
+    if isinstance(key_themes, list):
+        for t in key_themes:
+            if isinstance(t, str):
+                key_themes_list.append(t)
+            elif isinstance(t, dict):
+                # 'theme' 키가 없으면 딕셔너리 전체를 문자열로 변환
+                key_themes_list.append(str(t.get('theme', str(t))))
+            else:
+                key_themes_list.append(str(t))
+        key_themes_str = ', '.join(key_themes_list)
+    else:
+        key_themes_str = str(key_themes) if key_themes else 'N/A'
+    
+    # [수정 2] News Headlines 안전하게 변환
+    # 뉴스 데이터가 딕셔너리 리스트일 때 안전하게 타이틀만 추출
+    news_lines = []
+    if news_data and isinstance(news_data, list):
+        for n in news_data[:5]:
+            if isinstance(n, dict):
+                news_lines.append(f"- {n.get('title', 'No Title')}")
+            else:
+                news_lines.append(f"- {str(n)}")
+    
+    news_str = "\n".join(news_lines) if news_lines else "No news available"
     
     # Build comprehensive context
     strategy_prompt = f"""You are a senior portfolio strategist. Make a final trading decision for {ticker}.
@@ -596,11 +785,14 @@ def strategy_agent_node(state: AgentState) -> dict:
 ## SENTIMENT ANALYSIS (Agent 5)
 - Overall Sentiment: {sentiment_analysis.get('overall_sentiment', 'N/A')}
 - Sentiment Confidence: {sentiment_analysis.get('confidence', 'N/A')}
-- Key Themes: {', '.join(sentiment_analysis.get('key_themes', [])) or 'N/A'}
+- Key Themes: {key_themes_str}
 - Summary: {sentiment_analysis.get('summary', 'N/A')}
 
+## FUNDAMENTAL ANALYSIS (Agent 6) - 8 Quarters / 2 Years
+{fundamentals_summary}
+
 ## NEWS HEADLINES (Agent 1)
-{chr(10).join([f"- {n.get('title', '')}" for n in news_data[:5]]) or 'No news available'}
+{news_str}
 
 ---
 
@@ -649,12 +841,16 @@ Respond in JSON format with keys: decision, confidence, timeframe, reasoning, ri
         # Ensure risk_factors is a string (not a list)
         risk_factors = decision_data.get('risk_factors', 'No risk factors identified')
         if isinstance(risk_factors, list):
-            risk_factors = '; '.join(str(r) for r in risk_factors)
+            risk_factors = '; '.join(str(r) if not isinstance(r, dict) else str(r.get('factor', r.get('risk', str(r)))) for r in risk_factors)
+        elif isinstance(risk_factors, dict):
+            risk_factors = str(risk_factors)
         
         # Ensure reasoning is a string
         reasoning = decision_data.get('reasoning', 'No reasoning provided')
         if isinstance(reasoning, list):
-            reasoning = ' '.join(str(r) for r in reasoning)
+            reasoning = ' '.join(str(r) if not isinstance(r, dict) else str(r.get('point', r.get('reason', str(r)))) for r in reasoning)
+        elif isinstance(reasoning, dict):
+            reasoning = str(reasoning)
         
         final_signal = TradingSignal(
             decision=signal_type,
@@ -694,6 +890,7 @@ builder.add_node("ExtractTicker", extract_ticker_node)
 builder.add_node("NewsAgent", news_agent_node)
 builder.add_node("BlogAgent", blog_agent_node)
 builder.add_node("DataAgent", data_agent_node)
+builder.add_node("FundamentalsAgent", fundamentals_agent_node)
 builder.add_node("TechAnalysis", tech_analysis_node)
 builder.add_node("Sentiment", sentiment_agent_node)
 builder.add_node("Strategy", strategy_agent_node)
@@ -702,10 +899,11 @@ builder.add_node("Strategy", strategy_agent_node)
 # Start -> Extract Ticker
 builder.add_edge(START, "ExtractTicker")
 
-# Ticker -> Three parallel-ish agents (sequenced for simplicity)
+# Ticker -> Four parallel-ish agents (sequenced for simplicity)
 builder.add_edge("ExtractTicker", "NewsAgent")
 builder.add_edge("ExtractTicker", "BlogAgent")
 builder.add_edge("ExtractTicker", "DataAgent")
+builder.add_edge("ExtractTicker", "FundamentalsAgent")
 
 # Data Agent -> Tech Analysis (needs chart)
 builder.add_edge("DataAgent", "TechAnalysis")
@@ -714,9 +912,10 @@ builder.add_edge("DataAgent", "TechAnalysis")
 builder.add_edge("NewsAgent", "Sentiment")
 builder.add_edge("BlogAgent", "Sentiment")
 
-# Tech Analysis + Sentiment -> Strategy
+# Tech Analysis + Sentiment + Fundamentals -> Strategy
 builder.add_edge("TechAnalysis", "Strategy")
 builder.add_edge("Sentiment", "Strategy")
+builder.add_edge("FundamentalsAgent", "Strategy")
 
 # Strategy -> End
 builder.add_edge("Strategy", END)

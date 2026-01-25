@@ -1,6 +1,7 @@
 """
 Fundamentals Router - Historical financial statements using edgartools
 Returns 10 years of annual/quarterly data with YoY calculations
+Now with SQLite persistent caching and incremental updates.
 """
 
 from fastapi import APIRouter, Query
@@ -13,6 +14,51 @@ import re
 # EDGAR environment variables are set in main.py before this import
 from edgar import Company, set_identity
 from edgar.xbrl import XBRLS
+
+# Import SQLite cache functions
+import sys
+import os
+
+CACHE_ENABLED = False
+
+# Strategy 1: Direct import
+try:
+    from backend.cache import (
+        get_fundamentals_cache, save_fundamentals_batch,
+        get_fundamentals_cached_periods
+    )
+    CACHE_ENABLED = True
+except ImportError:
+    pass
+
+# Strategy 2: Relative from routers directory
+if not CACHE_ENABLED:
+    try:
+        # Go up from routers -> backend, then import cache
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        from cache import (
+            get_fundamentals_cache, save_fundamentals_batch,
+            get_fundamentals_cached_periods
+        )
+        CACHE_ENABLED = True
+    except ImportError:
+        pass
+
+# Strategy 3: From project root
+if not CACHE_ENABLED:
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from backend.cache import (
+            get_fundamentals_cache, save_fundamentals_batch,
+            get_fundamentals_cached_periods
+        )
+        CACHE_ENABLED = True
+    except ImportError as e:
+        print(f"[Warning] SQLite cache not available for fundamentals: {e}")
 
 router = APIRouter(prefix="/api", tags=["fundamentals"])
 
@@ -151,6 +197,35 @@ def process_statement_df(df: pd.DataFrame, is_annual: bool = True) -> tuple:
     return rows, period_labels
 
 
+def _cache_to_response_format(cached_statement: Dict[str, Dict]) -> List[Dict[str, Any]]:
+    """
+    Convert cached format (period -> {label: value}) to response format (list of rows).
+    """
+    if not cached_statement:
+        return []
+    
+    # Collect all labels across periods
+    all_labels = set()
+    for period_data in cached_statement.values():
+        all_labels.update(period_data.keys())
+    
+    # Build response format
+    result = []
+    for label in all_labels:
+        values = {}
+        for period, period_data in cached_statement.items():
+            if label in period_data:
+                values[period] = period_data[label]
+        
+        if values:
+            result.append({
+                "label": label,
+                "values": values
+            })
+    
+    return result
+
+
 @router.get("/fundamentals", response_model=FundamentalsResponse)
 async def get_fundamentals(
     ticker: str = Query(..., description="Stock ticker symbol"),
@@ -159,10 +234,42 @@ async def get_fundamentals(
     """
     Fetch historical financial statements from SEC EDGAR.
     Returns Income Statement, Balance Sheet, and Cash Flow with YoY changes.
+    Uses SQLite caching with incremental updates.
     """
     try:
         ticker = ticker.upper().strip()
         is_annual = type.lower() == "annual"
+        period_type = "annual" if is_annual else "quarterly"
+        
+        # Check SQLite cache first
+        if CACHE_ENABLED:
+            cached_periods = get_fundamentals_cached_periods(ticker, period_type)
+            
+            if cached_periods and len(cached_periods) >= 5:  # At least 5 periods cached
+                # Get cached data
+                cached_data = get_fundamentals_cache(ticker, period_type)
+                
+                # Reconstruct response from cache
+                if cached_data['income'] or cached_data['balance'] or cached_data['cashflow']:
+                    print(f"[OK] {ticker} fundamentals (from SQLite cache, {len(cached_periods)} periods)")
+                    
+                    # Convert cached format back to response format
+                    income_data = _cache_to_response_format(cached_data.get('income', {}))
+                    balance_data = _cache_to_response_format(cached_data.get('balance', {}))
+                    cashflow_data = _cache_to_response_format(cached_data.get('cashflow', {}))
+                    
+                    return FundamentalsResponse(
+                        success=True,
+                        ticker=ticker,
+                        period_type=type,
+                        periods=sorted(cached_periods, reverse=True),
+                        income=income_data,
+                        balance=balance_data,
+                        cashflow=cashflow_data
+                    )
+        
+        # Cache miss or insufficient data: fetch from SEC EDGAR
+        print(f"[*] {ticker} fundamentals (fetching from SEC EDGAR...)")
         
         # Get company
         company = Company(ticker)
@@ -224,6 +331,15 @@ async def get_fundamentals(
         all_periods = set(income_periods + balance_periods + cashflow_periods)
         periods = sorted(list(all_periods), reverse=True)
         
+        # Save to SQLite cache
+        if CACHE_ENABLED and periods:
+            save_fundamentals_batch(
+                ticker, period_type,
+                income_data, balance_data, cashflow_data,
+                periods
+            )
+            print(f"[OK] {ticker} fundamentals ({len(periods)} periods fetched and cached)")
+        
         return FundamentalsResponse(
             success=True,
             ticker=ticker,
@@ -247,3 +363,4 @@ async def get_fundamentals(
             cashflow=[],
             error=str(e)
         )
+

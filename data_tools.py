@@ -1,6 +1,7 @@
 """
 Data Tools Module for Multi-Agent System
 Implements data fetching and caching following reference code patterns.
+Now with SQLite persistent caching and incremental updates.
 """
 
 import yfinance as yf
@@ -14,7 +15,54 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict
 import os
 
-# --- Global Data Cache ---
+# Import SQLite cache functions
+CACHE_ENABLED = False
+
+# Try multiple import strategies for different execution contexts
+import sys
+
+# Strategy 1: Direct import (works when running from project root)
+try:
+    from backend.cache import (
+        get_ohlcv_cache, save_ohlcv_cache, get_ohlcv_last_date,
+        get_news_cache, save_news_cache, get_news_last_date
+    )
+    CACHE_ENABLED = True
+    print("[Cache] Loaded via direct import")
+except ImportError:
+    pass
+
+# Strategy 2: Add project root to path (works when data_tools.py is in project root)
+if not CACHE_ENABLED:
+    try:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from backend.cache import (
+            get_ohlcv_cache, save_ohlcv_cache, get_ohlcv_last_date,
+            get_news_cache, save_news_cache, get_news_last_date
+        )
+        CACHE_ENABLED = True
+        print("[Cache] Loaded via project root path")
+    except ImportError:
+        pass
+
+# Strategy 3: Absolute path import (works in any context)
+if not CACHE_ENABLED:
+    try:
+        cache_module_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+        if cache_module_path not in sys.path:
+            sys.path.insert(0, cache_module_path)
+        from cache import (
+            get_ohlcv_cache, save_ohlcv_cache, get_ohlcv_last_date,
+            get_news_cache, save_news_cache, get_news_last_date
+        )
+        CACHE_ENABLED = True
+        print("[Cache] Loaded via absolute path")
+    except ImportError as e:
+        print(f"[Warning] SQLite cache not available: {e}, using memory-only cache")
+
+# --- Global Memory Cache (fallback) ---
 DATA_CACHE: Dict[str, pd.DataFrame] = {}
 
 # Chart output directory
@@ -25,7 +73,7 @@ os.makedirs(CHART_DIR, exist_ok=True)
 def fetch_period_data(tickers: List[str], period: str = "3mo") -> Dict[str, pd.DataFrame]:
     """
     Fetch and cache period data for multiple tickers.
-    Follows Reference Code A pattern strictly.
+    Uses SQLite for persistent caching with incremental updates.
     
     Args:
         tickers: List of stock ticker symbols
@@ -36,27 +84,84 @@ def fetch_period_data(tickers: List[str], period: str = "3mo") -> Dict[str, pd.D
     """
     results = {}
     
+    # Map period string to days for date calculation
+    period_days = {
+        "1mo": 30, "3mo": 90, "6mo": 180,
+        "1y": 365, "2y": 730, "5y": 1825
+    }
+    days = period_days.get(period, 90)
+    start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    
     for ticker in tickers:
         ticker = ticker.upper()
         cache_key = f"{ticker}_{period}"
         
-        # Check cache first
+        # Check memory cache first (for same-session requests)
         if cache_key in DATA_CACHE:
-            print(f"[OK] {ticker} (from cache)")
+            print(f"[OK] {ticker} (from memory cache)")
             results[ticker] = DATA_CACHE[cache_key]
             continue
         
         try:
+            if CACHE_ENABLED:
+                # Get cached data from SQLite
+                cached_df = get_ohlcv_cache(ticker, start_date)
+                last_cached_date = get_ohlcv_last_date(ticker)
+                
+                if not cached_df.empty and last_cached_date:
+                    # Check if we need to fetch new data
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    
+                    if last_cached_date >= today:
+                        # Cache is up to date
+                        print(f"[OK] {ticker} (from SQLite cache, {len(cached_df)} rows)")
+                        DATA_CACHE[cache_key] = cached_df
+                        results[ticker] = cached_df
+                        continue
+                    else:
+                        # Incremental update: fetch only new data
+                        fetch_start = (datetime.strptime(last_cached_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+                        print(f"[*] {ticker} (incremental update from {fetch_start})")
+                        
+                        new_df = yf.download(ticker, start=fetch_start, progress=False)
+                        
+                        if not new_df.empty:
+                            if isinstance(new_df.columns, pd.MultiIndex):
+                                new_df.columns = new_df.columns.get_level_values(0)
+                            
+                            # Save new data to cache
+                            save_ohlcv_cache(ticker, new_df)
+                            
+                            # Combine cached + new data
+                            combined_df = pd.concat([cached_df, new_df])
+                            combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+                            combined_df.sort_index(inplace=True)
+                            
+                            print(f"[OK] {ticker} (added {len(new_df)} new rows, total {len(combined_df)})")
+                            DATA_CACHE[cache_key] = combined_df
+                            results[ticker] = combined_df
+                        else:
+                            # No new data, use cached
+                            print(f"[OK] {ticker} (no new data, using cache)")
+                            DATA_CACHE[cache_key] = cached_df
+                            results[ticker] = cached_df
+                        continue
+            
+            # No cache or cache disabled: fetch all data
+            print(f"[*] {ticker} (fetching from API...)")
             df = yf.download(ticker, period=period, progress=False)
             
             if not df.empty:
-                # Flatten multi-index columns if present
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 
+                # Save to SQLite cache
+                if CACHE_ENABLED:
+                    save_ohlcv_cache(ticker, df)
+                
                 DATA_CACHE[cache_key] = df
                 results[ticker] = df
-                print(f"[OK] {ticker} ({len(df)} rows fetched)")
+                print(f"[OK] {ticker} ({len(df)} rows fetched and cached)")
             else:
                 print(f"[X] {ticker} (no data)")
                 
@@ -128,21 +233,46 @@ def fetch_intraday_data(ticker: str, target_date: str) -> Optional[pd.DataFrame]
 
 def fetch_news_for_ticker(ticker: str, count: int = 25) -> List[dict]:
     """
-    Fetch news using yfinance.
-    Follows Reference Code B pattern strictly.
+    Fetch news using yfinance with SQLite caching.
+    Uses incremental updates to only fetch new news.
     
     Args:
         ticker: Stock ticker symbol
-        count: Number of news items to fetch
+        count: Number of news items to return
     
     Returns:
         List of news dictionaries with keys: id, title, summary, pubDate, url, tickers
     """
+    ticker = ticker.upper()
+    
     try:
-        data = yf.Ticker(ticker.upper()).get_news(count=count)
+        # Check SQLite cache first
+        if CACHE_ENABLED:
+            cached_news = get_news_cache(ticker, limit=count)
+            last_news_date = get_news_last_date(ticker)
+            
+            if cached_news and last_news_date:
+                # Check if cache is recent (within last 24 hours)
+                try:
+                    last_date = datetime.strptime(last_news_date, '%Y-%m-%d')
+                    today = datetime.now()
+                    
+                    if (today - last_date).days < 1:
+                        print(f"[OK] {ticker} news (from SQLite cache, {len(cached_news)} articles)")
+                        return cached_news[:count]
+                except:
+                    pass
+        
+        # Fetch fresh news from API
+        print(f"[*] {ticker} news (fetching from API...)")
+        data = yf.Ticker(ticker).get_news(count=count)
         news_list = []
         
         if not data:
+            # Return cached if available, otherwise empty
+            if CACHE_ENABLED and cached_news:
+                print(f"[!] {ticker} : No new news, using cached ({len(cached_news)} articles)")
+                return cached_news[:count]
             print(f"[!] {ticker} : No news articles found")
             return []
         
@@ -166,14 +296,24 @@ def fetch_news_for_ticker(ticker: str, count: int = 25) -> List[dict]:
                 'summary': content.get('summary', ''),
                 'pubDate': pub_date,
                 'url': url,
-                'tickers': [ticker.upper()]
+                'tickers': [ticker]
             })
         
-        print(f"[OK] {ticker} news ({len(news_list)} articles fetched)")
+        # Save to SQLite cache
+        if CACHE_ENABLED and news_list:
+            save_news_cache(ticker, news_list)
+        
+        print(f"[OK] {ticker} news ({len(news_list)} articles fetched and cached)")
         return news_list
         
     except Exception as e:
         print(f"[X] {ticker} news (error: {e})")
+        # Return cached on error
+        if CACHE_ENABLED:
+            cached_news = get_news_cache(ticker, limit=count)
+            if cached_news:
+                print(f"[!] Using cached news due to error ({len(cached_news)} articles)")
+                return cached_news[:count]
         return []
 
 

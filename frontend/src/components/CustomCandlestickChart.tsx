@@ -37,15 +37,15 @@ interface ChartProps {
 const COLORS = {
     up: '#22c55e',
     down: '#ef4444',
-    ma5: '#3b82f6',
-    ma20: '#f97316',
-    ma60: '#a855f7',
-    ma120: '#06b6d4',
+    ma5: '#60a5fa',   // Brighter Blue
+    ma20: '#fb923c',  // Brighter Orange
+    ma60: '#c084fc',  // Brighter Purple
+    ma120: '#22d3ee', // Brighter Cyan
     grid: '#1e293b',
     text: '#94a3b8',
 };
 
-export default function CustomCandlestickChart({ ticker, period = '6mo' }: ChartProps) {
+export default function CustomCandlestickChart({ ticker }: ChartProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const svgRef = useRef<SVGSVGElement>(null);
     const dataRef = useRef<OHLCVItem[]>([]);
@@ -58,19 +58,23 @@ export default function CustomCandlestickChart({ ticker, period = '6mo' }: Chart
     const [selectedNews, setSelectedNews] = useState<NewsItem[]>([]);
     const [loadingNews, setLoadingNews] = useState(false);
 
+    // View State
+    const [viewPeriod, setViewPeriod] = useState<string>('1y');
+
     // Keep data in ref to avoid re-renders
     useEffect(() => {
         dataRef.current = data;
     }, [data]);
 
-    // Fetch data
+    // Fetch data (Always 1y as requested)
     useEffect(() => {
         const fetchData = async () => {
             setLoading(true);
             setError('');
             try {
+                // FIXED: Always fetch 1y data for consistent MA calculation
                 const response = await fetch(
-                    `http://localhost:8000/api/ohlcv?ticker=${ticker}&period=${period}`
+                    `http://localhost:8000/api/ohlcv?ticker=${ticker}&period=1y`
                 );
                 const result = await response.json();
                 if (result.success) {
@@ -86,7 +90,7 @@ export default function CustomCandlestickChart({ ticker, period = '6mo' }: Chart
             }
         };
         if (ticker) fetchData();
-    }, [ticker, period]);
+    }, [ticker]); // Removed period dependency as we fixed it to 1y
 
     // Handle date click for news
     const handleDateClick = useCallback(async (date: string) => {
@@ -110,9 +114,27 @@ export default function CustomCandlestickChart({ ticker, period = '6mo' }: Chart
         }
     }, [news, ticker]);
 
+    // Filter Data based on viewPeriod
+    const getFilteredData = () => {
+        if (!data || data.length === 0) return [];
+
+        let sliceCount = data.length;
+        switch (viewPeriod) {
+            case '5d': sliceCount = 5; break;
+            case '1mo': sliceCount = 22; break; // Approx trading days
+            case '3mo': sliceCount = 66; break;
+            case '6mo': sliceCount = 126; break;
+            case '1y': default: sliceCount = data.length; break;
+        }
+
+        // Take the last N items
+        return sliceCount >= data.length ? data : data.slice(-sliceCount);
+    };
+
     // Draw chart
     useEffect(() => {
-        if (!svgRef.current || !containerRef.current || data.length === 0) return;
+        const filteredData = getFilteredData();
+        if (!svgRef.current || !containerRef.current || filteredData.length === 0) return;
 
         const container = containerRef.current;
         const width = container.clientWidth;
@@ -129,7 +151,7 @@ export default function CustomCandlestickChart({ ticker, period = '6mo' }: Chart
             .attr('height', totalHeight);
 
         const parseDate = d3.timeParse('%Y-%m-%d');
-        const chartData = data.map(d => ({ ...d, date: parseDate(d.time)! }));
+        const chartData = filteredData.map(d => ({ ...d, date: parseDate(d.time)! }));
 
         // Scales
         const xScale = d3.scaleBand()
@@ -291,7 +313,7 @@ export default function CustomCandlestickChart({ ticker, period = '6mo' }: Chart
             crosshairV.style('opacity', 0);
         });
 
-    }, [data, handleDateClick]);
+    }, [data, viewPeriod, handleDateClick]);
 
     // Helpers
     const formatVolume = (v: number) => {
@@ -340,6 +362,22 @@ export default function CustomCandlestickChart({ ticker, period = '6mo' }: Chart
                         <span className="flex items-center gap-1"><span className="w-3 h-0.5" style={{ background: COLORS.ma60 }}></span>MA60</span>
                         <span className="flex items-center gap-1"><span className="w-3 h-0.5" style={{ background: COLORS.ma120 }}></span>MA120</span>
                     </div>
+                </div>
+
+                {/* Timeframe Selector */}
+                <div className="flex justify-end gap-2 mb-2">
+                    {['5d', '1mo', '3mo', '6mo', '1y'].map(p => (
+                        <button
+                            key={p}
+                            onClick={() => setViewPeriod(p)}
+                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${viewPeriod === p
+                                    ? 'bg-blue-500 text-white shadow-md'
+                                    : 'bg-slate-700/50 text-slate-400 hover:bg-slate-600/50 hover:text-slate-200'
+                                }`}
+                        >
+                            {p.toUpperCase()}
+                        </button>
+                    ))}
                 </div>
 
                 {/* Chart */}
