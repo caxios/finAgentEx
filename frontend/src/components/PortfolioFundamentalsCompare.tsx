@@ -19,6 +19,7 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [periodType, setPeriodType] = useState<'annual' | 'quarterly'>('annual');
+    const [availablePeriods, setAvailablePeriods] = useState<string[]>([]);
 
     useEffect(() => {
         if (stocks.length > 0) {
@@ -43,6 +44,18 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
 
             const result = await res.json();
             setData(result);
+
+            // Extract all unique periods
+            const allPeriods = new Set<string>();
+            Object.values(result).forEach((d: any) => {
+                if (d.periods) {
+                    d.periods.forEach((p: string) => allPeriods.add(p));
+                }
+            });
+            // Sort periods (descending)
+            const sortedPeriods = Array.from(allPeriods).sort().reverse();
+            setAvailablePeriods(sortedPeriods);
+
         } catch (err) {
             setError(err instanceof Error ? err.message : 'Unknown error');
         } finally {
@@ -75,14 +88,73 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
         return `${(num * 100).toFixed(2)}%`;
     };
 
-    // Get latest common period if possible, otherwise just use latest available for each?
-    // For comparison, we usually want the same period.
-    // Let's find the most recent period common to at least one stock to start.
-    // Actually, each stock might have different fiscal years.
-    // We will just show the "Latest" column produced by the backend's sorted periods.
+    // Helper to get previous period string (YoY)
+    const getPrevPeriod = (currentPeriod: string, type: 'annual' | 'quarterly') => {
+        if (type === 'annual') {
+            const year = parseInt(currentPeriod);
+            return isNaN(year) ? null : (year - 1).toString();
+        } else {
+            // Format "2025Q4" or "2025-Q4" or however it comes. 
+            // The image shows "2025Q4". 
+            // Regex to parse Year and Quarter
+            const match = currentPeriod.match(/^(\d{4})Q(\d)$/);
+            if (match) {
+                const year = parseInt(match[1]);
+                const q = match[2];
+                return `${year - 1}Q${q}`;
+            }
+            return null;
+        }
+    };
 
-    // We will display a matrix: Rows = Metrics, Cols = Tickers
-    // Metrics: Revenue, Net Income, Net Margin %, Operating Cash Flow, Total Assets, Total Liabilities, Debt Ratio
+    // Render helper for a cell containing multiple tickers
+    const renderCell = (
+        getValue: (d: FundamentalsResponse, p: string) => number | null,
+        formatter: (v: number | null) => string = formatNumber,
+        colorCondition?: (v: number) => string
+    ) => {
+        return availablePeriods.map(period => (
+            <td key={period} className="px-2 py-3 text-center min-w-[160px] align-top border-l border-gray-100">
+                <div className="flex flex-col gap-1">
+                    {stocks.map(ticker => {
+                        const d = data[ticker];
+                        if (!d || d.error) return null;
+
+                        const val = getValue(d, period);
+                        const displayVal = formatter(val);
+                        const colorClass = (val !== null && colorCondition) ? colorCondition(val) : '';
+
+                        // Calculate YoY
+                        let yoyChange: number | null = null;
+                        const prevPeriod = getPrevPeriod(period, periodType);
+                        if (prevPeriod && val !== null) {
+                            const prevVal = getValue(d, prevPeriod);
+                            if (prevVal !== null && prevVal !== 0) {
+                                yoyChange = ((val - prevVal) / Math.abs(prevVal)) * 100;
+                            }
+                        }
+
+                        return (
+                            <div key={ticker} className="flex justify-between items-center text-xs px-2 py-0.5 hover:bg-gray-50 rounded">
+                                <span className="font-bold text-gray-500 w-10 text-left shrink-0">{ticker}:</span>
+                                <div className="flex items-center justify-end gap-2 text-right w-full">
+                                    <span className={`font-medium ${colorClass}`}>{displayVal}</span>
+                                    {yoyChange !== null && (
+                                        <span className={`text-[10px] w-12 text-right ${yoyChange >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                            {yoyChange > 0 ? '+' : ''}{yoyChange.toFixed(1)}%
+                                        </span>
+                                    )}
+                                    {yoyChange === null && (
+                                        <span className="text-[10px] w-12 text-right text-gray-300">-</span>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </td>
+        ));
+    };
 
     return (
         <div className="bg-white p-6 rounded-xl shadow-lg mt-6 overflow-hidden">
@@ -91,7 +163,7 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                     <span className="text-2xl">📊</span> Financials Comparison
                 </h2>
 
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                     <button
                         onClick={() => setPeriodType('annual')}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${periodType === 'annual'
@@ -128,14 +200,13 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
 
             {!loading && !error && Object.keys(data).length > 0 && (
                 <div className="overflow-x-auto">
-                    <table className="w-full text-sm text-left">
+                    <table className="w-full text-sm text-left border-collapse">
                         <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b">
                             <tr>
-                                <th className="px-4 py-3 sticky left-0 bg-gray-50 font-bold min-w-[200px]">Metric (Latest)</th>
-                                {stocks.map(ticker => (
-                                    <th key={ticker} className="px-4 py-3 font-bold text-center min-w-[120px]">
-                                        {ticker}
-                                        {data[ticker]?.error && <span className="text-red-500 text-xs block">Error</span>}
+                                <th className="px-4 py-3 sticky left-0 bg-gray-50 font-bold min-w-[180px] z-10 shadow-sm">Metric</th>
+                                {availablePeriods.map(period => (
+                                    <th key={period} className="px-4 py-3 font-bold text-center min-w-[140px] border-l border-gray-200">
+                                        {period}
                                     </th>
                                 ))}
                             </tr>
@@ -143,178 +214,102 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                         <tbody className="divide-y divide-gray-200">
                             {/* Revenue */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Revenue</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.income, ['revenue', 'sales'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Revenue</td>
+                                {renderCell((d, p) => findValue(d.income, ['revenue', 'sales'], p))}
                             </tr>
 
                             {/* Net Income */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Net Income</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.income, ['net income', 'net loss'], latestPeriod);
-                                    return (
-                                        <td key={ticker} className={`text-center font-medium ${val && val >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                            {formatNumber(val)}
-                                        </td>
-                                    );
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Net Income</td>
+                                {renderCell(
+                                    (d, p) => findValue(d.income, ['net income', 'net loss'], p),
+                                    formatNumber,
+                                    (val) => val >= 0 ? 'text-green-600' : 'text-red-600'
+                                )}
                             </tr>
 
                             {/* Net Margin */}
                             <tr className="hover:bg-gray-50 bg-gray-50/50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-gray-50/50">Net Margin</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const rev = findValue(d.income, ['revenue', 'sales'], latestPeriod);
-                                    const inc = findValue(d.income, ['net income', 'net loss'], latestPeriod);
-                                    const margin = (rev && inc) ? inc / rev : null;
-                                    return <td key={ticker} className="text-center font-bold text-blue-600">{formatPercent(margin)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-gray-50/50 z-10 shadow-sm border-r border-gray-100">Net Margin</td>
+                                {renderCell(
+                                    (d, p) => {
+                                        const rev = findValue(d.income, ['revenue', 'sales'], p);
+                                        const inc = findValue(d.income, ['net income', 'net loss'], p);
+                                        return (rev && inc) ? inc / rev : null;
+                                    },
+                                    formatPercent,
+                                    () => 'text-blue-600 font-bold'
+                                )}
                             </tr>
 
                             {/* Operating Cash Flow */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Operating Cash Flow</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.cashflow, ['operating activities', 'operations'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Cash Flow</td>
+                                {renderCell((d, p) => findValue(d.cashflow, ['operating activities', 'operations'], p))}
                             </tr>
 
                             {/* Total Assets */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Total Assets</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.balance, ['total assets'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Total Assets</td>
+                                {renderCell((d, p) => findValue(d.balance, ['total assets'], p))}
                             </tr>
 
                             {/* Total Liabilities */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Total Liabilities</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.balance, ['total liabilities'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Total Liabilities</td>
+                                {renderCell((d, p) => findValue(d.balance, ['total liabilities'], p))}
                             </tr>
 
                             {/* --- New Metrics --- */}
 
                             {/* Operating Income */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Operating Income</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.income, ['operating income', 'operating profit'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Income</td>
+                                {renderCell((d, p) => findValue(d.income, ['operating income', 'operating profit'], p))}
                             </tr>
 
                             {/* Operating Expenses */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Operating Expenses</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.income, ['operating expenses'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Expenses</td>
+                                {renderCell((d, p) => findValue(d.income, ['operating expenses'], p))}
                             </tr>
 
-                            {/* Interest Paid / Expense */}
+                            {/* Interest Paid */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Interest Paid</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    // Try cash flow first, then income statement
-                                    let val = findValue(d.cashflow, ['interest paid', 'cash paid for interest'], latestPeriod);
-                                    if (val === null) {
-                                        val = findValue(d.income, ['interest expense'], latestPeriod);
-                                    }
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Interest Paid</td>
+                                {renderCell((d, p) => {
+                                    let val = findValue(d.cashflow, ['interest paid', 'cash paid for interest'], p);
+                                    if (val === null) val = findValue(d.income, ['interest expense'], p);
+                                    return val;
                                 })}
                             </tr>
 
                             {/* Investing Cash Flow */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Investing Cash Flow</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.cashflow, ['investing activities', 'investments'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Investing Cash Flow</td>
+                                {renderCell((d, p) => findValue(d.cashflow, ['investing activities', 'investments'], p))}
                             </tr>
 
-                            {/* Net Cash Flow (Net Change) */}
+                            {/* Net Cash Flow */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Net Cash Flow</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.cashflow, ['net change in cash', 'increase (decrease) in cash', 'cash and cash equivalents, period increase'], latestPeriod);
-                                    return (
-                                        <td key={ticker} className={`text-center font-bold ${val && val >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                            {formatNumber(val)}
-                                        </td>
-                                    );
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Net Cash Flow</td>
+                                {renderCell(
+                                    (d, p) => findValue(d.cashflow, ['net change in cash', 'increase (decrease) in cash', 'cash and cash equivalents, period increase'], p),
+                                    formatNumber,
+                                    (val) => val >= 0 ? 'text-green-600' : 'text-red-600'
+                                )}
                             </tr>
 
                             {/* Short-term Debt */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Short-term Debt</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.balance, ['short-term debt', 'current debt', 'debt, current', 'current liabilities'], latestPeriod); // Including Current Liabilities as fallback if strictly debt not found? No, keep strictly debt first.
-                                    // Actually user asked for short term debt. Often it is part of Current Liabilities.
-                                    // Let's stick to specific debt terms first.
-                                    // Refine: ['short-term debt', 'current portion of long-term debt']
-                                    // Ideally we want just debt, not all current liabilities.
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Short-term Debt</td>
+                                {renderCell((d, p) => findValue(d.balance, ['short-term debt', 'current debt', 'debt, current', 'current liabilities'], p))}
                             </tr>
 
                             {/* Long-term Debt */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white">Long-term Debt</td>
-                                {stocks.map(ticker => {
-                                    const d = data[ticker];
-                                    if (!d || d.error) return <td key={ticker} className="text-center text-gray-400">-</td>;
-                                    const latestPeriod = d.periods[0];
-                                    const val = findValue(d.balance, ['long-term debt', 'non-current debt'], latestPeriod);
-                                    return <td key={ticker} className="text-center">{formatNumber(val)}</td>;
-                                })}
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Long-term Debt</td>
+                                {renderCell((d, p) => findValue(d.balance, ['long-term debt', 'non-current debt'], p))}
                             </tr>
                         </tbody>
                     </table>
