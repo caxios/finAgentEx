@@ -10,6 +10,10 @@ from typing import List, Dict, Any, Optional
 import pandas as pd
 from datetime import datetime
 import re
+import asyncio
+import json
+from concurrent.futures import ThreadPoolExecutor
+from backend.redis_client import redis_client
 
 # EDGAR environment variables are set in main.py before this import
 from edgar import Company, set_identity
@@ -66,6 +70,7 @@ router = APIRouter(prefix="/api", tags=["fundamentals"])
 set_identity("FinAgentEx finagentex@example.com")
 
 
+
 class FundamentalsResponse(BaseModel):
     success: bool
     ticker: str
@@ -75,6 +80,11 @@ class FundamentalsResponse(BaseModel):
     balance: List[Dict[str, Any]]
     cashflow: List[Dict[str, Any]]
     error: Optional[str] = None
+
+class BatchFundamentalsRequest(BaseModel):
+    tickers: List[str]
+    period_type: str = "annual"  # "annual" or "quarterly"
+
 
 
 def date_to_label(date_str: str, is_annual: bool = False) -> str:
@@ -226,22 +236,26 @@ def _cache_to_response_format(cached_statement: Dict[str, Dict]) -> List[Dict[st
     return result
 
 
-@router.get("/fundamentals", response_model=FundamentalsResponse)
-async def get_fundamentals(
-    ticker: str = Query(..., description="Stock ticker symbol"),
-    type: str = Query("annual", description="annual or quarterly")
-):
+
+def _fetch_fundamental_data_internal(ticker: str, type: str) -> FundamentalsResponse:
     """
-    Fetch historical financial statements from SEC EDGAR.
-    Returns Income Statement, Balance Sheet, and Cash Flow with YoY changes.
-    Uses SQLite caching with incremental updates.
+    Internal synchronous function to fetch fundamentals.
+    Checks Redis -> SQLite -> Edgar.
+    Designed to be run in a thread pool.
     """
     try:
         ticker = ticker.upper().strip()
         is_annual = type.lower() == "annual"
         period_type = "annual" if is_annual else "quarterly"
+        redis_key = f"fundamentals:{ticker}:{period_type}"
         
-        # Check SQLite cache first
+        # 1. Check Redis Cache
+        cached_redis = redis_client.get(redis_key)
+        if cached_redis:
+            print(f"[OK] {ticker} fundamentals (from Redis cache)")
+            return FundamentalsResponse(**cached_redis)
+
+        # 2. Check SQLite Cache
         if CACHE_ENABLED:
             cached_periods = get_fundamentals_cached_periods(ticker, period_type)
             
@@ -258,7 +272,7 @@ async def get_fundamentals(
                     balance_data = _cache_to_response_format(cached_data.get('balance', {}))
                     cashflow_data = _cache_to_response_format(cached_data.get('cashflow', {}))
                     
-                    return FundamentalsResponse(
+                    response = FundamentalsResponse(
                         success=True,
                         ticker=ticker,
                         period_type=type,
@@ -267,8 +281,12 @@ async def get_fundamentals(
                         balance=balance_data,
                         cashflow=cashflow_data
                     )
+                    
+                    # Save to Redis for future fast access
+                    redis_client.set(redis_key, response.model_dump(), ex=86400 * 7) # 7 days
+                    return response
         
-        # Cache miss or insufficient data: fetch from SEC EDGAR
+        # 3. Cache miss or insufficient data: fetch from SEC EDGAR
         print(f"[*] {ticker} fundamentals (fetching from SEC EDGAR...)")
         
         # Get company
@@ -331,7 +349,7 @@ async def get_fundamentals(
         all_periods = set(income_periods + balance_periods + cashflow_periods)
         periods = sorted(list(all_periods), reverse=True)
         
-        # Save to SQLite cache
+        # 4. Save to SQLite cache
         if CACHE_ENABLED and periods:
             save_fundamentals_batch(
                 ticker, period_type,
@@ -340,7 +358,7 @@ async def get_fundamentals(
             )
             print(f"[OK] {ticker} fundamentals ({len(periods)} periods fetched and cached)")
         
-        return FundamentalsResponse(
+        response = FundamentalsResponse(
             success=True,
             ticker=ticker,
             period_type=type,
@@ -349,6 +367,11 @@ async def get_fundamentals(
             balance=balance_data,
             cashflow=cashflow_data
         )
+        
+        # 5. Save to Redis
+        redis_client.set(redis_key, response.model_dump(), ex=86400 * 7) # 7 days
+        
+        return response
         
     except Exception as e:
         import traceback
@@ -363,4 +386,54 @@ async def get_fundamentals(
             cashflow=[],
             error=str(e)
         )
+
+
+@router.get("/fundamentals", response_model=FundamentalsResponse)
+async def get_fundamentals(
+    ticker: str = Query(..., description="Stock ticker symbol"),
+    type: str = Query("annual", description="annual or quarterly")
+):
+    """
+    Fetch historical financial statements from SEC EDGAR.
+    """
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor() as pool:
+        result = await loop.run_in_executor(
+            pool, _fetch_fundamental_data_internal, ticker, type
+        )
+    return result
+
+
+@router.post("/fundamentals/batch", response_model=Dict[str, FundamentalsResponse])
+async def fetch_fundamentals_batch(request: BatchFundamentalsRequest):
+    """
+    Fetch fundamentals for multiple tickers in parallel.
+    Optimized with Redis caching and thread pooling.
+    """
+    loop = asyncio.get_event_loop()
+    results = {}
+    
+    # Use a ThreadPoolExecutor to run sync edgar functions in parallel
+    # Limit max_workers to avoid hitting rate limits or memory issues
+    max_workers = min(10, len(request.tickers))
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        tasks = []
+        for ticker in request.tickers:
+            tasks.append(
+                loop.run_in_executor(
+                    pool, 
+                    _fetch_fundamental_data_internal, 
+                    ticker, 
+                    request.period_type
+                )
+            )
+        
+        completed_responses = await asyncio.gather(*tasks)
+        
+        for response in completed_responses:
+            results[response.ticker] = response
+            
+    return results
+
 

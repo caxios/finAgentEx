@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import PortfolioChart from './PortfolioChart';
 import PortfolioNews from './PortfolioNews';
+import PortfolioFundamentalsCompare from './PortfolioFundamentalsCompare';
 
 const API_BASE = "http://localhost:8000/api/portfolio";
 
@@ -13,6 +14,7 @@ export default function PortfolioTab() {
     const [analysisData, setAnalysisData] = useState<any>(null);
     const [timeframe, setTimeframe] = useState<string>("6mo");
     const [loading, setLoading] = useState(false);
+    const [showFundamentals, setShowFundamentals] = useState(false);
 
     // Inputs
     const [newCatName, setNewCatName] = useState("");
@@ -28,6 +30,7 @@ export default function PortfolioTab() {
         if (selectedCategory) {
             fetchStocks(selectedCategory.id);
             setAnalysisData(null); // Reset chart
+            setShowFundamentals(false); // Reset view
         }
     }, [selectedCategory]);
 
@@ -185,7 +188,19 @@ export default function PortfolioTab() {
                         <div className="flex justify-between items-center mb-6">
                             <h1 className="text-2xl font-bold">{selectedCategory.name} Analysis</h1>
 
-                            <div className="flex gap-2">
+                            <div className="flex gap-2 items-center">
+                                {/* Toggle View Button */}
+                                <button
+                                    onClick={() => setShowFundamentals(!showFundamentals)}
+                                    className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${showFundamentals
+                                        ? 'bg-purple-600 text-white shadow-lg'
+                                        : 'bg-white text-gray-700 border hover:bg-gray-50'}`}
+                                >
+                                    {showFundamentals ? 'Show Chart' : 'Compare Fundamentals'}
+                                </button>
+
+                                <div className="h-6 w-px bg-gray-300 mx-2"></div>
+
                                 {["5D", "1mo", "3mo", "6mo", "1y", "3y", "5y"].map(tf => (
                                     <button
                                         key={tf}
@@ -228,47 +243,53 @@ export default function PortfolioTab() {
                             </div>
                         </div>
 
-                        {/* Analysis Chart */}
-                        {loading ? (
-                            <div className="h-64 flex items-center justify-center text-gray-500">
-                                Loading Analysis Data...
-                            </div>
-                        ) : analysisData ? (
-                            <PortfolioChart data={analysisData} />
+                        {showFundamentals ? (
+                            <PortfolioFundamentalsCompare stocks={stocks} />
                         ) : (
-                            <div className="h-64 flex items-center justify-center text-gray-400 bg-gray-50 rounded border border-dashed">
-                                Add stocks to visualize performance
-                            </div>
-                        )}
+                            <>
+                                {/* Analysis Chart */}
+                                {loading ? (
+                                    <div className="h-64 flex items-center justify-center text-gray-500">
+                                        Loading Analysis Data...
+                                    </div>
+                                ) : analysisData ? (
+                                    <PortfolioChart data={analysisData} />
+                                ) : (
+                                    <div className="h-64 flex items-center justify-center text-gray-400 bg-gray-50 rounded border border-dashed">
+                                        Add stocks to visualize performance
+                                    </div>
+                                )}
 
-                        {/* Stats Summary */}
-                        {analysisData && (
-                            <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="bg-white p-4 rounded shadow border-t-4 border-black">
-                                    <div className="text-gray-500 text-sm">Category Index Return</div>
-                                    <div className={`text-2xl font-bold ${analysisData.index.final >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {analysisData.index.final > 0 ? '+' : ''}{analysisData.index.final}%
+                                {/* Stats Summary */}
+                                {analysisData && (
+                                    <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="bg-white p-4 rounded shadow border-t-4 border-black">
+                                            <div className="text-gray-500 text-sm">Category Index Return</div>
+                                            <div className={`text-2xl font-bold ${analysisData.index.final >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                {analysisData.index.final > 0 ? '+' : ''}{analysisData.index.final}%
+                                            </div>
+                                        </div>
+                                        {/* Top Performer */}
+                                        <div className="bg-white p-4 rounded shadow border-t-4 border-green-500">
+                                            <div className="text-gray-500 text-sm">Top Performer</div>
+                                            <div className="text-xl font-bold">
+                                                {Object.entries(analysisData.stocks).sort(([, a]: any, [, b]: any) => b.final - a.final)[0]?.[0]}
+                                            </div>
+                                        </div>
+                                        {/* Worst Performer */}
+                                        <div className="bg-white p-4 rounded shadow border-t-4 border-red-500">
+                                            <div className="text-gray-500 text-sm">Worst Performer</div>
+                                            <div className="text-xl font-bold">
+                                                {Object.entries(analysisData.stocks).sort(([, a]: any, [, b]: any) => a.final - b.final)[0]?.[0]}
+                                            </div>
+                                        </div>
                                     </div>
-                                </div>
-                                {/* Top Performer */}
-                                <div className="bg-white p-4 rounded shadow border-t-4 border-green-500">
-                                    <div className="text-gray-500 text-sm">Top Performer</div>
-                                    <div className="text-xl font-bold">
-                                        {Object.entries(analysisData.stocks).sort(([, a]: any, [, b]: any) => b.final - a.final)[0]?.[0]}
-                                    </div>
-                                </div>
-                                {/* Worst Performer */}
-                                <div className="bg-white p-4 rounded shadow border-t-4 border-red-500">
-                                    <div className="text-gray-500 text-sm">Worst Performer</div>
-                                    <div className="text-xl font-bold">
-                                        {Object.entries(analysisData.stocks).sort(([, a]: any, [, b]: any) => a.final - b.final)[0]?.[0]}
-                                    </div>
-                                </div>
-                            </div>
-                        )}
+                                )}
 
-                        {/* News Section */}
-                        <PortfolioNews categoryId={selectedCategory.id} />
+                                {/* News Section */}
+                                <PortfolioNews categoryId={selectedCategory.id} />
+                            </>
+                        )}
 
                     </>
                 ) : (

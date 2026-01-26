@@ -36,3 +36,5 @@ python-dotenv>=1.0.0
 # --- HTTP Client (for Tavily) ---
 httpx>=0.25.0
 
+# --- Caching ---
+redis>=5.0.0
