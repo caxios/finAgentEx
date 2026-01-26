@@ -399,9 +399,14 @@ def save_fundamentals_batch(ticker: str, period_type: str,
             period_data = {}
             for row in data_list:
                 label = row.get('label', '')
+                concept = row.get('concept')
                 values = row.get('values', {})
                 if period in values:
-                    period_data[label] = values[period]
+                    # Store value/yoy AND concept
+                    entry = values[period].copy()
+                    if concept:
+                        entry['concept'] = concept
+                    period_data[label] = entry
             
             if period_data:
                 cursor.execute("""

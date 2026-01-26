@@ -20,7 +20,7 @@ os.environ['EDGAR_LOCAL_DATA_DIR'] = str(_edgar_cache)
 os.environ['EDGAR_CACHE_DIR'] = str(_edgar_cache)
 
 # Import routers (fundamentals imports edgar)
-from backend.routers import analysis, chart, fundamentals, portfolio
+from backend.routers import analysis, chart, fundamentals, portfolio, fundamentals_batch
 
 app = FastAPI(
     title="Stock Analysis API",
@@ -41,6 +41,7 @@ app.add_middleware(
 app.include_router(analysis.router)
 app.include_router(chart.router)
 app.include_router(fundamentals.router)
+app.include_router(fundamentals_batch.router)
 app.include_router(portfolio.router)
 
 
