@@ -122,33 +122,42 @@ def calculate_yoy(values: Dict[str, Any], periods: List[str]) -> Dict[str, Dict[
     result = {}
     sorted_periods = sorted(periods, reverse=True)  # Most recent first
     
-    for i, period in enumerate(sorted_periods):
-        data = values.get(period, {})
-        if isinstance(data, dict):
-            value = data.get("value")
-        else:
-            value = data
+    # helper to parse period string
+    def parse_period(p_str):
+        # returns (year, quarter) or (year, None)
+        # format: "2024" or "2024Q3"
+        m_q = re.match(r'^(\d{4})Q(\d)$', p_str)
+        if m_q:
+            return int(m_q.group(1)), int(m_q.group(2))
+        
+        m_y = re.match(r'^(\d{4})$', p_str)
+        if m_y:
+            return int(m_y.group(1)), None
+        return None, None
+
+    for period in sorted_periods:
+        current_data = values.get(period, {})
+        val = current_data.get("value") if isinstance(current_data, dict) else current_data
         
         yoy = None
         
-        # Calculate YoY if we have previous year's same period
-        # For quarterly: compare 2025Q3 with 2024Q3
-        # For annual: compare 2025 with 2024
-        if i + 4 < len(sorted_periods):  # 4 quarters ago for quarterly
-            prev_period = sorted_periods[i + 4]
-            prev_data = values.get(prev_period, {})
-            prev_value = prev_data.get("value") if isinstance(prev_data, dict) else prev_data
-            if value is not None and prev_value is not None and prev_value != 0:
-                yoy = round((value - prev_value) / abs(prev_value) * 100, 2)
-        elif i + 1 < len(sorted_periods):  # Fallback: compare with previous period
-            prev_period = sorted_periods[i + 1]
-            prev_data = values.get(prev_period, {})
-            prev_value = prev_data.get("value") if isinstance(prev_data, dict) else prev_data
-            if value is not None and prev_value is not None and prev_value != 0:
-                yoy = round((value - prev_value) / abs(prev_value) * 100, 2)
-        
+        if val is not None:
+            year, quarter = parse_period(period)
+            if year:
+                prev_period_str = ""
+                if quarter:
+                    prev_period_str = f"{year-1}Q{quarter}"
+                else:
+                    prev_period_str = str(year-1)
+                
+                prev_data = values.get(prev_period_str, {})
+                prev_val = prev_data.get("value") if isinstance(prev_data, dict) else prev_data
+                
+                if prev_val is not None and prev_val != 0:
+                     yoy = round((val - prev_val) / abs(prev_val) * 100, 2)
+
         result[period] = {
-            "value": value,
+            "value": val,
             "yoy": yoy
         }
     
@@ -207,35 +216,26 @@ def process_statement_df(df: pd.DataFrame, is_annual: bool = True) -> tuple:
     return rows, period_labels
 
 
-def _cache_to_response_format(cached_statement: Dict[str, Dict]) -> List[Dict[str, Any]]:
+def merge_fundamentals_data(all_data: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """
-    Convert cached format (period -> {label: value}) to response format (list of rows).
+    Merge multiple lists of rows (from different filings) into one.
+    format: [{label: 'Revenue', values: { '2025Q3': {value: 100},... }}]
     """
-    if not cached_statement:
-        return []
+    merged_map = {}  # label -> { 'label': ..., 'values': { period: {value: ...} } }
     
-    # Collect all labels across periods
-    all_labels = set()
-    for period_data in cached_statement.values():
-        all_labels.update(period_data.keys())
-    
-    # Build response format
-    result = []
-    for label in all_labels:
-        values = {}
-        for period, period_data in cached_statement.items():
-            if label in period_data:
-                values[period] = period_data[label]
-        
-        if values:
-            result.append({
-                "label": label,
-                "values": values
-            })
-    
-    return result
-
-
+    for chunk in all_data:
+        for row in chunk:
+            label = row['label']
+            if label not in merged_map:
+                merged_map[label] = {'label': label, 'values': {}}
+            
+            # Merge values
+            # If overlap, new data might overwrite old, or we can simply update
+            # Since we iterate filings (recommend newest first), we can just update
+            merged_map[label]['values'].update(row['values'])
+            
+    # Convert back to list
+    return list(merged_map.values())
 
 def _fetch_fundamental_data_internal(ticker: str, type: str) -> FundamentalsResponse:
     """
@@ -293,8 +293,15 @@ def _fetch_fundamental_data_internal(ticker: str, type: str) -> FundamentalsResp
         company = Company(ticker)
         
         # Fetch filings
-        form_type = "10-K" if is_annual else "10-Q"
-        num_filings = 10 if is_annual else 40  # 10 years annual or ~10 years quarterly
+        # For Quarterly: We need to stitch manually to ensure "Quarterly Comparison" view is used
+        # For Annual: "Annual Comparison" on 10-K is usually fine
+        
+        form_type = "10-K" if is_annual else ["10-K", "10-Q"] 
+        # Note: We include 10-K for quarterly too because Q4 implies 10-K, 
+        # though standard 10-K might not give Q4 easily. 
+        # But let's try to get as much as possible.
+        
+        num_filings = 10 if is_annual else 20 
         
         filings = company.get_filings(form=form_type, amendments=False).head(num_filings)
         
@@ -307,47 +314,82 @@ def _fetch_fundamental_data_internal(ticker: str, type: str) -> FundamentalsResp
                 income=[],
                 balance=[],
                 cashflow=[],
-                error=f"No {form_type} filings found for {ticker}"
+                error=f"No filings found for {ticker}"
             )
+
+        # Manual Stitching Strategy
+        chunk_income = []
+        chunk_balance = []
+        chunk_cashflow = []
         
-        # Use XBRLS stitching for both annual and quarterly
-        xbrls = XBRLS.from_filings(filings)
-        statements = xbrls.statements
+        all_periods = set()
+        p_view = "Annual Comparison" if is_annual else "Quarterly Comparison"
         
-        # Extract statements to DataFrames
-        income_df = None
-        balance_df = None
-        cashflow_df = None
+        # Iterate filings (most recent first usually)
+        for filing in filings:
+            try:
+                # Get financials (this parses XBRL)
+                # obj() automiatically returns TenQ/TenK/EightK object
+                f_obj = filing.obj()
+                financials = getattr(f_obj, 'financials', None)
+                
+                if not financials:
+                    continue
+                
+                # Helper to process a statement type
+                def extract_and_process(method_name):
+                    stmt = getattr(financials, method_name)(period_view=p_view)
+                    if stmt:
+                        df = stmt.to_dataframe()
+                        # Note: we pass is_annual to date_to_label
+                        # For quarterly data, process_statement_df expects dataframe columns
+                        return process_statement_df(df, is_annual)
+                    return [], []
+
+                # Income
+                i_rows, i_periods = extract_and_process('income_statement')
+                chunk_income.append(i_rows)
+                all_periods.update(i_periods)
+                
+                # Balance
+                b_rows, b_periods = extract_and_process('balance_sheet')
+                chunk_balance.append(b_rows)
+                all_periods.update(b_periods)
+                
+                # Cashflow
+                c_rows, c_periods = extract_and_process('cashflow_statement')
+                chunk_cashflow.append(c_rows)
+                all_periods.update(c_periods)
+                
+            except Exception as e:
+                print(f"Error processing filing {filing.accession_number}: {e}")
+                continue
         
-        try:
-            income_stmt = statements.income_statement()
-            if income_stmt:
-                income_df = income_stmt.to_dataframe()
-        except Exception as e:
-            print(f"Income statement error: {e}")
+        # Merge chunks
+        income_data = merge_fundamentals_data(chunk_income)
+        balance_data = merge_fundamentals_data(chunk_balance)
+        cashflow_data = merge_fundamentals_data(chunk_cashflow)
         
-        try:
-            balance_stmt = statements.balance_sheet()
-            if balance_stmt:
-                balance_df = balance_stmt.to_dataframe()
-        except Exception as e:
-            print(f"Balance sheet error: {e}")
-        
-        try:
-            cashflow_stmt = statements.cashflow_statement()
-            if cashflow_stmt:
-                cashflow_df = cashflow_stmt.to_dataframe()
-        except Exception as e:
-            print(f"Cash flow error: {e}")
-        
-        # Process statements
-        income_data, income_periods = process_statement_df(income_df, is_annual)
-        balance_data, balance_periods = process_statement_df(balance_df, is_annual)
-        cashflow_data, cashflow_periods = process_statement_df(cashflow_df, is_annual)
-        
-        # Combine all periods
-        all_periods = set(income_periods + balance_periods + cashflow_periods)
+        # Final set of periods
         periods = sorted(list(all_periods), reverse=True)
+        
+        # Re-calculate YoY on merged data (since previous year might be in a different filing)
+        def recalc_yoy(data_list):
+            for row in data_list:
+                # row['values'] is currently { period: {value: v, yoy: None} } (from process_statement_df)
+                # We need to re-run calculate_yoy logic on the full set of values
+                
+                # extract raw value map: period -> value/dict
+                val_map = row['values']
+                # calculate_yoy expects {period: {value: ...}} or {period: value}
+                # it returns full dict with yoy
+                new_vals = calculate_yoy(val_map, periods)
+                row['values'] = new_vals
+            return data_list
+
+        income_data = recalc_yoy(income_data)
+        balance_data = recalc_yoy(balance_data)
+        cashflow_data = recalc_yoy(cashflow_data)
         
         # 4. Save to SQLite cache
         if CACHE_ENABLED and periods:
