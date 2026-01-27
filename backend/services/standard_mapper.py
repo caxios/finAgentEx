@@ -9,6 +9,11 @@ STANDARD_CONCEPT_MAP = {
         "us-gaap_Revenues",
         "us-gaap_SalesRevenueNet",
         "us-gaap_SalesRevenueGoodsNet",
+    "Revenue": [
+        "us-gaap_RevenueFromContractWithCustomerExcludingAssessedTax",
+        "us-gaap_Revenues",
+        "us-gaap_SalesRevenueNet",
+        "us-gaap_SalesRevenueGoodsNet",
         "us-gaap_RevenueFromContractWithCustomerIncludingAssessedTax"
     ],
     "Cost of Revenue": [
@@ -86,6 +91,7 @@ def standardize_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Standardize a list of rows (Income/Balance/Cashflow).
     If a row's concept matches a standard key, update its 'label'.
+    Includes FUZZY MATCHING for flexibility.
     """
     if not rows:
         return []
@@ -93,21 +99,72 @@ def standardize_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     # clone rows to avoid mutating original cache if shared references exist
     new_rows = []
     
-    # We might have multiple rows mapping to the SAME standard label (e.g. Revenue vs Other Revenue)
-    # In a Portfolio Summary View, we usually want the MAIN one.
-    # But a simple re-labeling is safer than merging rows here to avoid data loss.
-    # The frontend usually picks by label.
-    
     for row in rows:
         new_row = row.copy()
         concept = row.get('concept')
         
-        # Try to map by XBRL Concept first
+        mapped = False
+        
+        # 1. Try Exact Map (O(1))
         if concept and concept in CONCEPT_TO_LABEL:
             new_row['label'] = CONCEPT_TO_LABEL[concept]
-        
-        # (Optional) Map by Label text similarity if concept is missing? 
-        # Risky, let's stick to explicit XBRL concepts for 100% accuracy requested by user.
+            mapped = True
+            
+        # 2. Try Fuzzy Match if not mapped
+        # Logic: If standard key (e.g., "Cost of Revenue") part is in concept string
+        if not mapped and concept and isinstance(concept, str):
+            c_lower = concept.lower()
+            
+            # Priority checks for robust fuzzy matching
+            # Order matters: check specific long terms before generic short terms
+            
+            # Cost of Revenue / COGS
+            if "costofrevenue" in c_lower or "costofgood" in c_lower or "costofservice" in c_lower:
+                new_row['label'] = "Cost of Revenue"
+                mapped = True
+            
+            # Operating Expenses (check before Operating Income)
+            elif "operatingexpense" in c_lower:
+                new_row['label'] = "Operating Expenses"
+                mapped = True
+                
+            # R&D
+            elif "researchanddevelopment" in c_lower:
+                new_row['label'] = "Research & Development"
+                mapped = True
+            
+            # SG&A
+            elif "sellinggeneral" in c_lower or "sellingandmarketing" in c_lower:
+                new_row['label'] = "Selling, General & Admin"
+                mapped = True
+            
+            # Operating Income
+            elif "operatingincome" in c_lower or "operatingloss" in c_lower:
+                new_row['label'] = "Operating Income"
+                mapped = True
+                
+            # Net Income
+            elif "netincome" in c_lower or "profitloss" in c_lower:
+                new_row['label'] = "Net Income"
+                mapped = True
+            
+            # Revenue (Check late as it's often a substring of others like Cost of Revenue)
+            elif "revenue" in c_lower or "sales" in c_lower:
+                # Guard against false positives like "CostOfRevenue"
+                if "cost" not in c_lower:
+                    new_row['label'] = "Revenue"
+                    mapped = True
+                    
+            # Cash Flow
+            elif "cash" in c_lower and "operating" in c_lower:
+                new_row['label'] = "Operating Cash Flow"
+                mapped = True
+            elif "cash" in c_lower and "investing" in c_lower:
+                new_row['label'] = "Investing Cash Flow"
+                mapped = True
+            elif "cash" in c_lower and "financing" in c_lower:
+                new_row['label'] = "Financing Cash Flow"
+                mapped = True
         
         new_rows.append(new_row)
         

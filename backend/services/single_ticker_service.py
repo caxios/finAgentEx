@@ -2,10 +2,10 @@ from typing import Optional, Dict, Any, List
 from backend.schemas.fundamentals import FundamentalsResponse
 from backend.redis_client import redis_client
 from backend.services.fundamentals_utils import (
-    calculate_yoy, cache_to_response_format, parse_period_sort_key
+    cache_to_response_format, parse_period_sort_key
 )
-from backend.services.annual_processor import fetch_annual_data
-from backend.services.quarterly_processor import fetch_quarterly_data
+# New Unified Service
+from backend.services.fundamentals_service import fetch_fundamentals_data
 
 # Cache imports
 try:
@@ -22,7 +22,7 @@ def fetch_ticker_fundamentals(ticker: str, period_type_req: str) -> Fundamentals
     Orchestrate fetching fundamentals for a single ticker.
     1. Check Redis
     2. Check SQLite
-    3. Fetch via Processors
+    3. Fetch via Unified XBRLS Service
     4. Save to Cache
     """
     try:
@@ -62,13 +62,10 @@ def fetch_ticker_fundamentals(ticker: str, period_type_req: str) -> Fundamentals
                     redis_client.set(redis_key, response.model_dump(), ex=86400 * 7)
                     return response
 
-        # 3. Fetch from Processors
-        print(f"[*] {ticker} {period_type} fundamentals (fetching from Processors...)")
+        # 3. Fetch from Unified Service (XBRLS)
+        print(f"[*] {ticker} {period_type} fundamentals (fetching via XBRLS...)")
         
-        if is_annual:
-            raw_data = fetch_annual_data(ticker)
-        else:
-            raw_data = fetch_quarterly_data(ticker)
+        raw_data = fetch_fundamentals_data(ticker, period_type)
             
         periods = raw_data.get('periods', [])
         income_data = raw_data.get('income', [])
@@ -81,19 +78,6 @@ def fetch_ticker_fundamentals(ticker: str, period_type_req: str) -> Fundamentals
                 periods=[], income=[], balance=[], cashflow=[],
                 error=f"No data found for {ticker}"
             )
-            
-        # Post-process: Recalculate YoY on the full merged dataset ensures accuracy across filings
-        def recalc_yoy(data_list):
-            for row in data_list:
-                val_map = row['values']
-                # calculate_yoy returns full dict with yoy
-                new_vals = calculate_yoy(val_map, periods)
-                row['values'] = new_vals
-            return data_list
-
-        income_data = recalc_yoy(income_data)
-        balance_data = recalc_yoy(balance_data)
-        cashflow_data = recalc_yoy(cashflow_data)
 
         # 4. Save to SQLite Cache
         if CACHE_ENABLED and periods:
