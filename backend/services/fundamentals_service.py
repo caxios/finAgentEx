@@ -43,7 +43,7 @@ def fetch_fundamentals_data(ticker: str, period_type: str = "annual") -> Dict[st
         # Use standard=True to leverage edgartools' built-in concept standardization
         income_df = xbrls.statements.income_statement(standard=True).to_dataframe()
         balance_df = xbrls.statements.balance_sheet(standard=True).to_dataframe()
-        cashflow_df = xbrls.statements.cash_flow_statement(standard=True).to_dataframe()
+        cashflow_df = xbrls.statements.cashflow_statement(standard=True).to_dataframe()
 
         # 4. Filter Periods (Conceptually "Stitching")
         # XBRLS columns are period end dates.
@@ -93,37 +93,40 @@ def fetch_fundamentals_data(ticker: str, period_type: str = "annual") -> Dict[st
             # We need to find the T-1 column for each T column.
             
             processed_rows = []
-            
-            for index, row in subset.iterrows():
-                # Index is the Label or Concept Name
-                label = str(index)
-                
-                # Concept: In standard=True, the index is often the standard label (e.g., "Revenue")
-                # We can use it as both label and concept.
-                concept = label 
+
+            for idx, row in subset.iterrows():
+                # DataFrame has 'label' and 'concept' as regular columns (index is numeric)
+                label = str(df.at[idx, 'label']) if 'label' in df.columns else str(idx)
+                concept = str(df.at[idx, 'concept']) if 'concept' in df.columns else label
                 
                 values_map = {}
                 
                 for col in current_cols: # col is date str '2024-09-30'
-                    val = row[col]
-                    if pd.isna(val):
+                    raw_val = row[col]
+                    if pd.isna(raw_val):
                         continue
-                        
+                    try:
+                        val = float(raw_val)
+                    except (ValueError, TypeError):
+                        continue
+
                     # Find T-1 period
                     prev_col = _find_prev_period_col(col, current_cols, is_annual)
-                    
+
                     yoy = None
                     if prev_col:
-                        prev_val = row[prev_col]
-                        if pd.notna(prev_val) and prev_val != 0:
-                            yoy = round((val - prev_val) / abs(prev_val) * 100, 2)
-                    
-                    # Store
-                    # Convert column date to display period (e.g. 2024Q3)
+                        raw_prev = row[prev_col]
+                        try:
+                            prev_val = float(raw_prev)
+                            if prev_val != 0:
+                                yoy = round((val - prev_val) / abs(prev_val) * 100, 2)
+                        except (ValueError, TypeError):
+                            pass
+
                     display_period = period_map[col]['display']
-                    
+
                     values_map[display_period] = {
-                        "value": float(val),
+                        "value": val,
                         "yoy": yoy
                     }
                 
@@ -172,15 +175,15 @@ def _get_period_metadata(xbrls: XBRLS, is_annual: bool) -> Dict[str, Dict]:
     periods = xbrls.get_periods()
     
     for p in periods:
-        # p is dict with 'period_end', 'period_start', 'type', 'days' etc depending on implementation
-        # Or p is just info.
-        # xbrls.get_periods() returns a list of dictionaries with period info.
-        
-        p_end = p.get('period_end')
-        p_start = p.get('period_start')
-        p_type = p.get('type') # 'duration' or 'instant'
+        p_type = p.get('type')  # 'duration' or 'instant'
         days = p.get('days', 0)
-        
+
+        # edgartools uses 'end_date' for duration periods, 'date' for instant periods
+        if p_type == 'duration':
+            p_end = p.get('end_date')
+        else:
+            p_end = p.get('date')
+
         if not p_end: continue
         
         # Strict Filtering

@@ -245,7 +245,7 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Operating Cash Flow */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Cash Flow</td>
-                                {renderCell((d, p) => findValue(d.cashflow, ['operating activities', 'operations'], p))}
+                                {renderCell((d, p) => findValue(d.cashflow, ['operating cash flow', 'operating activities', 'operations'], p))}
                             </tr>
 
                             {/* Total Assets */}
@@ -287,7 +287,7 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Investing Cash Flow */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Investing Cash Flow</td>
-                                {renderCell((d, p) => findValue(d.cashflow, ['investing activities', 'investments'], p))}
+                                {renderCell((d, p) => findValue(d.cashflow, ['investing cash flow', 'investing activities', 'investments'], p))}
                             </tr>
 
                             {/* Net Cash Flow */}

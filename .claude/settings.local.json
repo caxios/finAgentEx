@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(tasklist:*)",
+      "Bash(netsh interface ipv4 show excludedportrange:*)",
+      "Bash(c:\\\\finAgentEx\\\\venv\\\\Scripts\\\\python.exe -m uvicorn:*)",
+      "Bash(./venv/Scripts/python.exe -m uvicorn:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(python:*)",
+      "Bash(docker exec:*)"
+    ]
+  }
+}
