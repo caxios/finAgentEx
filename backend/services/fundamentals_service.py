@@ -1,34 +1,24 @@
-from typing import Dict, Any, List, Optional
-import pandas as pd
+from typing import Dict, Any, List
 from edgar import Company
 from edgar.xbrl import XBRLS
-from datetime import datetime, timedelta
+
 
 def fetch_fundamentals_data(ticker: str, period_type: str = "annual") -> Dict[str, Any]:
     """
-    Fetch and process fundamentals data using XBRLS.
-    
-    Args:
-        ticker: Stock symbol
-        period_type: 'annual' or 'quarterly'
-        
-    Returns:
-        Dict with keys: 'income', 'balance', 'cashflow', 'periods'
+    Fetch fundamentals using XBRLS render_statement().
+    Uses edgartools' built-in YoY comparison and standardization.
     """
     try:
         ticker = ticker.upper().strip()
         is_annual = period_type.lower() == "annual"
-        
+
         # 1. Fetch Filings
         company = Company(ticker)
         if is_annual:
-            # 10-K filings (Annual)
             filings = company.get_filings(form="10-K").filter(amendments=False).head(10)
         else:
-            # 10-Q and 10-K to catch Q4 if needed, but usually 10-Q for quarterly trend
-            # Fetching deep to ensure we get matching prior year quarters for YoY
-            filings = company.get_filings(form=["10-Q", "10-K"]).filter(amendments=False).head(40)
-            
+            filings = company.get_filings(form="10-Q").filter(amendments=False).head(12)
+
         if not filings or len(filings) == 0:
             return _empty_response()
 
@@ -39,124 +29,28 @@ def fetch_fundamentals_data(ticker: str, period_type: str = "annual") -> Dict[st
             print(f"Error initializing XBRLS for {ticker}: {e}")
             return _empty_response()
 
-        # 3. Process Statements
-        # Use standard=True to leverage edgartools' built-in concept standardization
-        income_df = xbrls.statements.income_statement(standard=True).to_dataframe()
-        balance_df = xbrls.statements.balance_sheet(standard=True).to_dataframe()
-        cashflow_df = xbrls.statements.cashflow_statement(standard=True).to_dataframe()
+        # 3. Render Statements (edgartools handles standardization & YoY)
+        max_periods = 10 if is_annual else 12
 
-        # 4. Filter Periods (Conceptually "Stitching")
-        # XBRLS columns are period end dates.
-        # We need to filter based on period type and logic.
-        
-        # Get period metadata from XBRLS to check duration
-        # We need to match DF columns to period metadata
-        period_map = _get_period_metadata(xbrls, is_annual)
-        
-        # Filter DataFrames to keep only valid columns
-        valid_periods = [p for p in income_df.columns if p in period_map]
-        
-        if not valid_periods:
-             return _empty_response()
-             
-        # Sort periods: Newest first
-        valid_periods.sort(reverse=True)
-        
-        # Helper to process each dataframe
-        def process_df(df: pd.DataFrame) -> List[Dict[str, Any]]:
-            if df.empty:
-                return []
-            
-            # Select valid columns and mapped concepts
-            # Ensure 'standard_concept' or index is used as label/concept
-            # to_dataframe() with standard=True usually puts labels as index? 
-            # Actually edgar tools puts standard_concept as a column if standard=True?
-            # Let's inspect: xbrls.statements.income_statement(standard=True).to_dataframe()
-            # It usually returns index as concept name (or label), and columns as dates.
-            # If standard=True, the labels might be standardized.
-            
-            # We will trust the index as the label/concept for now.
-            # But standard_concept metadata is better.
-            # Let's conform to the structure: label, concept, values
-            
-            # Filter columns
-            current_cols = [c for c in df.columns if c in valid_periods]
-            if not current_cols:
-                return []
-                
-            subset = df[current_cols].copy()
-            
-            # Calculate YoY
-            # Rows are concepts, Cols are periods (Newest...Oldest or Oldest...Newest?)
-            # Usually to_dataframe columns are dates.
-            # YoY logic: (T - (T-1)) / abs(T-1)
-            # We need to find the T-1 column for each T column.
-            
-            processed_rows = []
+        income_stmt = xbrls.render_statement('IncomeStatement', max_periods=max_periods, standardize=True)
+        balance_stmt = xbrls.render_statement('BalanceSheet', max_periods=max_periods, standardize=True)
+        cashflow_stmt = xbrls.render_statement('CashFlowStatement', max_periods=max_periods, standardize=True)
 
-            for idx, row in subset.iterrows():
-                # DataFrame has 'label' and 'concept' as regular columns (index is numeric)
-                label = str(df.at[idx, 'label']) if 'label' in df.columns else str(idx)
-                concept = str(df.at[idx, 'concept']) if 'concept' in df.columns else label
-                
-                values_map = {}
-                
-                for col in current_cols: # col is date str '2024-09-30'
-                    raw_val = row[col]
-                    if pd.isna(raw_val):
-                        continue
-                    try:
-                        val = float(raw_val)
-                    except (ValueError, TypeError):
-                        continue
+        # 4. Convert to frontend format
+        comparison_data = income_stmt.metadata.get('comparison_data', {})
 
-                    # Find T-1 period
-                    prev_col = _find_prev_period_col(col, current_cols, is_annual)
+        income_data = _convert_statement(income_stmt, comparison_data, is_annual)
+        balance_data = _convert_statement(balance_stmt, balance_stmt.metadata.get('comparison_data', {}), is_annual)
+        cashflow_data = _convert_statement(cashflow_stmt, cashflow_stmt.metadata.get('comparison_data', {}), is_annual)
 
-                    yoy = None
-                    if prev_col:
-                        raw_prev = row[prev_col]
-                        try:
-                            prev_val = float(raw_prev)
-                            if prev_val != 0:
-                                yoy = round((val - prev_val) / abs(prev_val) * 100, 2)
-                        except (ValueError, TypeError):
-                            pass
-
-                    display_period = period_map[col]['display']
-
-                    values_map[display_period] = {
-                        "value": val,
-                        "yoy": yoy
-                    }
-                
-                if values_map:
-                    processed_rows.append({
-                        "label": label,
-                        "concept": concept,
-                        "values": values_map
-                    })
-            
-            # Apply standardization (Exact + Fuzzy)
-            from backend.services.standard_mapper import standardize_rows
-            return standardize_rows(processed_rows)
-
-        income_data = process_df(income_df)
-        balance_data = process_df(balance_df)
-        cashflow_data = process_df(cashflow_df)
-        
-        # Collect all unique display periods from the processed data
-        all_display_periods = set()
-        for row in income_data + balance_data + cashflow_data:
-            all_display_periods.update(row['values'].keys())
-            
-        sorted_periods = sorted(list(all_display_periods), reverse=True)
+        # 5. Collect periods
+        periods = _get_period_labels(income_stmt, is_annual)
 
         return {
             'income': income_data,
             'balance': balance_data,
             'cashflow': cashflow_data,
-            'periods': sorted_periods
+            'periods': periods
         }
 
     except Exception as e:
@@ -164,101 +58,93 @@ def fetch_fundamentals_data(ticker: str, period_type: str = "annual") -> Dict[st
         traceback.print_exc()
         return _empty_response()
 
+
+def _convert_statement(stmt, comparison_data: Dict, is_annual: bool) -> List[Dict[str, Any]]:
+    """Convert RenderedStatement to frontend format."""
+    rows = []
+    df = stmt.to_dataframe()
+
+    # Get period columns (date columns like '2024-01-28')
+    period_cols = [c for c in df.columns if c not in ['concept', 'label', 'level', 'abstract', 'dimension', 'is_breakdown']]
+
+    for _, row in df.iterrows():
+        if row.get('abstract', False):
+            continue
+
+        label = str(row.get('label', ''))
+        concept = str(row.get('concept', ''))
+
+        # Skip empty labels
+        if not label or label == 'nan':
+            continue
+
+        values_map = {}
+
+        for col in period_cols:
+            raw_val = row.get(col)
+            if raw_val is None or (isinstance(raw_val, float) and str(raw_val) == 'nan'):
+                continue
+
+            try:
+                val = float(raw_val)
+            except (ValueError, TypeError):
+                continue
+
+            # Get YoY from comparison_data
+            yoy = None
+            if concept in comparison_data:
+                for pk, (change, _) in comparison_data[concept].items():
+                    if col in pk:
+                        yoy = round(change * 100, 2) if change is not None else None
+                        break
+
+            # Convert date to display label
+            display_period = _date_to_display(col, is_annual)
+
+            values_map[display_period] = {
+                "value": val,
+                "yoy": yoy
+            }
+
+        if values_map:
+            rows.append({
+                "label": label,
+                "concept": concept,
+                "values": values_map
+            })
+
+    return rows
+
+
+def _get_period_labels(stmt, is_annual: bool) -> List[str]:
+    """Extract period labels from statement."""
+    labels = []
+    for p in stmt.periods:
+        labels.append(_date_to_display(p.end_date, is_annual))
+    return labels
+
+
+def _date_to_display(date_str: str, is_annual: bool) -> str:
+    """Convert date string to display format."""
+    from datetime import datetime
+    import re
+    try:
+        # Extract date part (handle cases like "2025-04-27 (Q2)")
+        date_match = re.match(r'(\d{4}-\d{2}-\d{2})', date_str)
+        if date_match:
+            date_part = date_match.group(1)
+        else:
+            date_part = date_str
+
+        d = datetime.strptime(date_part, "%Y-%m-%d")
+        if is_annual:
+            return str(d.year)
+        else:
+            q = (d.month - 1) // 3 + 1
+            return f"{d.year}Q{q}"
+    except:
+        return date_str
+
+
 def _empty_response():
     return {'income': [], 'balance': [], 'cashflow': [], 'periods': []}
-
-def _get_period_metadata(xbrls: XBRLS, is_annual: bool) -> Dict[str, Dict]:
-    """
-    Map DataFrame column headers (dates) to period metadata (display label, strict valid check).
-    """
-    valid_map = {}
-    periods = xbrls.get_periods()
-    
-    for p in periods:
-        p_type = p.get('type')  # 'duration' or 'instant'
-        days = p.get('days', 0)
-
-        # edgartools uses 'end_date' for duration periods, 'date' for instant periods
-        if p_type == 'duration':
-            p_end = p.get('end_date')
-        else:
-            p_end = p.get('date')
-
-        if not p_end: continue
-        
-        # Strict Filtering
-        is_valid = False
-        if is_annual:
-            # Annual: Duration ~ 365 days
-            if p_type == 'duration' and 350 <= days <= 375:
-                is_valid = True
-            elif p_type == 'instant': 
-                # Balance sheet acts as instant, but usually tied to the covering period logic
-                # XBRLS handles this by associating instant with the duration period.
-                # But here we filter based on column header which is usually the end date.
-                pass
-        else:
-            # Quarterly: Duration ~ 90 days (Discrete)
-            # EXCLUDE YTD (~180, ~270, ~365)
-            if p_type == 'duration' and 80 <= days <= 105:
-                is_valid = True
-                
-        # For Instant concepts (Balance Sheet), XBRLS usually aligns them with the period end.
-        # So if we filter for valid duration periods, we can accept the corresponding instant date.
-        # But wait, income statement (duration) and balance sheet (instant) might share columns?
-        # A 10-Q will have income for 3 months (Discrete) and balance sheet as of End Date.
-        # A 10-Q might ALSO have income for 9 months (YTD).
-        # We only want the 3 month column for Income Statement.
-        # Balance Sheet is always instant, so snapshot date is same.
-        
-        # Simplified approach: valid_map keys are DATES.
-        # Only map dates that correspond to valid INCOME periods (Durations).
-        # Balance sheet columns matching these dates will be effectively selected.
-        
-        if is_valid:
-            if is_annual:
-                # 2024-09-28 -> "2024"
-                label = str(datetime.strptime(p_end, "%Y-%m-%d").year)
-            else:
-                # 2024-09-28 -> "2024Q4"
-                d = datetime.strptime(p_end, "%Y-%m-%d")
-                # Adjust for fiscal year offset? user asks for calendar or fiscal?
-                # Usually standard mapping:
-                # But simple mapping:
-                if d.day <= 7: d -= timedelta(days=7) # Fiscal alignment
-                q = (d.month - 1) // 3 + 1
-                label = f"{d.year}Q{q}"
-                
-            valid_map[p_end] = {
-                'display': label,
-                'end_date': datetime.strptime(p_end, "%Y-%m-%d")
-            }
-            
-    return valid_map
-
-def _find_prev_period_col(current_col: str, all_cols: List[str], is_annual: bool) -> Optional[str]:
-    """
-    Find the column representing the T-1 period.
-    """
-    try:
-        curr_date = datetime.strptime(current_col, "%Y-%m-%d")
-        
-        # Target date is approx 1 year ago for BOTH Annual and Quarterly (YoY)
-        target_date = curr_date - timedelta(days=365)
-        
-        best_match = None
-        min_diff = 30 # Allow 30 days drift (Gregorian vs 52-53 week fiscal)
-        
-        for col in all_cols:
-            if col == current_col: continue
-            d = datetime.strptime(col, "%Y-%m-%d")
-            diff = abs((d - target_date).days)
-            
-            if diff < min_diff:
-                min_diff = diff
-                best_match = col
-                
-        return best_match
-        
-    except:
-        return None

@@ -64,13 +64,28 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
     };
 
     // Helper to find value in statement list
-    const findValue = (statement: any[], labelSubstrings: string[], period: string) => {
+    // Supports both concept-based matching (preferred) and label-based fallback
+    const findValue = (statement: any[], identifiers: string[], period: string) => {
         if (!statement) return null;
 
-        // Find row that matches label
-        const row = statement.find(r =>
-            labelSubstrings.some(sub => r.label.toLowerCase().includes(sub.toLowerCase()))
+        // 1. Try exact concept match first (most reliable)
+        let row = statement.find(r =>
+            identifiers.some(id => r.concept === id)
         );
+
+        // 2. Fallback to exact label match
+        if (!row) {
+            row = statement.find(r =>
+                identifiers.some(id => r.label.toLowerCase() === id.toLowerCase())
+            );
+        }
+
+        // 3. Fallback to partial label match
+        if (!row) {
+            row = statement.find(r =>
+                identifiers.some(id => r.label.toLowerCase().includes(id.toLowerCase()))
+            );
+        }
 
         if (!row || !row.values[period]) return null;
         return row.values[period].value;
@@ -215,14 +230,14 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Revenue */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Revenue</td>
-                                {renderCell((d, p) => findValue(d.income, ['revenue', 'sales'], p))}
+                                {renderCell((d, p) => findValue(d.income, ['us-gaap_Revenues', 'us-gaap_RevenueFromContractWithCustomerExcludingAssessedTax', 'revenue', 'net sales'], p))}
                             </tr>
 
                             {/* Net Income */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Net Income</td>
                                 {renderCell(
-                                    (d, p) => findValue(d.income, ['net income', 'net loss'], p),
+                                    (d, p) => findValue(d.income, ['us-gaap_NetIncomeLoss', 'net income'], p),
                                     formatNumber,
                                     (val) => val >= 0 ? 'text-green-600' : 'text-red-600'
                                 )}
@@ -233,8 +248,8 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-gray-50/50 z-10 shadow-sm border-r border-gray-100">Net Margin</td>
                                 {renderCell(
                                     (d, p) => {
-                                        const rev = findValue(d.income, ['revenue', 'sales'], p);
-                                        const inc = findValue(d.income, ['net income', 'net loss'], p);
+                                        const rev = findValue(d.income, ['us-gaap_Revenues', 'us-gaap_RevenueFromContractWithCustomerExcludingAssessedTax', 'revenue', 'net sales'], p);
+                                        const inc = findValue(d.income, ['us-gaap_NetIncomeLoss', 'net income'], p);
                                         return (rev && inc) ? inc / rev : null;
                                     },
                                     formatPercent,
@@ -245,19 +260,19 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Operating Cash Flow */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Cash Flow</td>
-                                {renderCell((d, p) => findValue(d.cashflow, ['operating cash flow', 'operating activities', 'operations'], p))}
+                                {renderCell((d, p) => findValue(d.cashflow, ['us-gaap_NetCashProvidedByUsedInOperatingActivities', 'operating activities', 'operations'], p))}
                             </tr>
 
                             {/* Total Assets */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Total Assets</td>
-                                {renderCell((d, p) => findValue(d.balance, ['total assets'], p))}
+                                {renderCell((d, p) => findValue(d.balance, ['us-gaap_Assets', 'total assets'], p))}
                             </tr>
 
                             {/* Total Liabilities */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Total Liabilities</td>
-                                {renderCell((d, p) => findValue(d.balance, ['total liabilities'], p))}
+                                {renderCell((d, p) => findValue(d.balance, ['us-gaap_Liabilities', 'total liabilities'], p))}
                             </tr>
 
                             {/* --- New Metrics --- */}
@@ -265,21 +280,21 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Operating Income */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Income</td>
-                                {renderCell((d, p) => findValue(d.income, ['operating income', 'operating profit'], p))}
+                                {renderCell((d, p) => findValue(d.income, ['us-gaap_OperatingIncomeLoss', 'operating income', 'income from operations'], p))}
                             </tr>
 
                             {/* Operating Expenses */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Operating Expenses</td>
-                                {renderCell((d, p) => findValue(d.income, ['operating expenses'], p))}
+                                {renderCell((d, p) => findValue(d.income, ['us-gaap_OperatingExpenses', 'us-gaap_CostsAndExpenses', 'operating expenses', 'total operating expenses'], p))}
                             </tr>
 
                             {/* Interest Paid */}
                             <tr className="hover:bg-gray-50">
-                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Interest Paid</td>
+                                <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Interest Expense</td>
                                 {renderCell((d, p) => {
-                                    let val = findValue(d.cashflow, ['interest paid', 'cash paid for interest'], p);
-                                    if (val === null) val = findValue(d.income, ['interest expense'], p);
+                                    let val = findValue(d.income, ['us-gaap_InterestExpense', 'us-gaap_InterestExpenseNonoperating', 'interest expense'], p);
+                                    if (val === null) val = findValue(d.cashflow, ['us-gaap_InterestPaidNet', 'interest paid'], p);
                                     return val;
                                 })}
                             </tr>
@@ -287,14 +302,14 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Investing Cash Flow */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Investing Cash Flow</td>
-                                {renderCell((d, p) => findValue(d.cashflow, ['investing cash flow', 'investing activities', 'investments'], p))}
+                                {renderCell((d, p) => findValue(d.cashflow, ['us-gaap_NetCashProvidedByUsedInInvestingActivities', 'investing activities'], p))}
                             </tr>
 
                             {/* Net Cash Flow */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Net Cash Flow</td>
                                 {renderCell(
-                                    (d, p) => findValue(d.cashflow, ['net change in cash', 'increase (decrease) in cash', 'cash and cash equivalents, period increase'], p),
+                                    (d, p) => findValue(d.cashflow, ['us-gaap_CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect', 'us-gaap_CashAndCashEquivalentsPeriodIncreaseDecrease', 'net change in cash'], p),
                                     formatNumber,
                                     (val) => val >= 0 ? 'text-green-600' : 'text-red-600'
                                 )}
@@ -303,13 +318,13 @@ export default function PortfolioFundamentalsCompare({ stocks }: Props) {
                             {/* Short-term Debt */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Short-term Debt</td>
-                                {renderCell((d, p) => findValue(d.balance, ['short-term debt', 'current debt', 'debt, current', 'current liabilities'], p))}
+                                {renderCell((d, p) => findValue(d.balance, ['us-gaap_DebtCurrent', 'us-gaap_ShortTermBorrowings', 'us-gaap_CommercialPaper', 'us-gaap_LongTermDebtCurrent', 'short-term debt'], p))}
                             </tr>
 
                             {/* Long-term Debt */}
                             <tr className="hover:bg-gray-50">
                                 <td className="px-4 py-3 font-medium text-gray-900 sticky left-0 bg-white z-10 shadow-sm border-r border-gray-100">Long-term Debt</td>
-                                {renderCell((d, p) => findValue(d.balance, ['long-term debt', 'non-current debt'], p))}
+                                {renderCell((d, p) => findValue(d.balance, ['us-gaap_LongTermDebtNoncurrent', 'us-gaap_LongTermDebt', 'us-gaap_LongTermDebtAndCapitalLeaseObligations', 'long-term debt'], p))}
                             </tr>
                         </tbody>
                     </table>
