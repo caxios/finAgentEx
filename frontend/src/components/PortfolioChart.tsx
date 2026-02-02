@@ -42,6 +42,14 @@ const PortfolioChart: React.FC<PortfolioChartProps> = ({ data }) => {
         return point;
     });
 
+    const formatMarketCap = (mCap: number) => {
+        if (!mCap) return '';
+        if (mCap >= 1e12) return `(${(mCap / 1e12).toFixed(1)}T)`;
+        if (mCap >= 1e9) return `(${(mCap / 1e9).toFixed(1)}B)`;
+        if (mCap >= 1e6) return `(${(mCap / 1e6).toFixed(1)}M)`;
+        return '';
+    };
+
     return (
         <div className="w-full h-[500px] bg-white rounded-lg shadow-md p-4 mt-4">
             <h3 className="text-lg font-bold mb-4 text-center">Peformance Comparison (Normalized %)</h3>
@@ -64,7 +72,15 @@ const PortfolioChart: React.FC<PortfolioChartProps> = ({ data }) => {
                         labelStyle={{ color: '#000' }}
                         formatter={(value: any) => [`${Number(value).toFixed(2)}%`, '']}
                     />
-                    <Legend />
+                    <Legend
+                        formatter={(value, entry: any) => {
+                            const ticker = value;
+                            // Attempt to find market cap from data.stocks
+                            // entry.payload might contain reference, but simplest is to look up in props.data
+                            const mCap = data?.stocks?.[ticker]?.marketCap;
+                            return <span className="mr-2 font-medium">{ticker} <span className="text-xs text-gray-500">{formatMarketCap(mCap)}</span></span>;
+                        }}
+                    />
 
                     {/* Render lines for each stock */}
                     {Object.keys(data.stocks).map(ticker => (

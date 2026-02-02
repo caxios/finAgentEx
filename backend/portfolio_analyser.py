@@ -92,13 +92,30 @@ def fetch_and_normalize_data(tickers: List[str], period: str = "6mo") -> Dict[st
         "#EC4899", "#6366F1", "#14B8A6", "#F97316", "#06B6D4"
     ]
     
+    # --- Fetch Market Caps ---
+    market_caps = {}
+    for t in tickers:
+        try:
+            # fast_info is faster and provides 'market_cap'
+            # Note: fast_info is an object that supports __getitem__ but might not have .get()
+            mc = yf.Ticker(t).fast_info['market_cap']
+            market_caps[t] = mc if mc is not None else 0
+        except Exception:
+             # Fallback to info if fast_info fails (rare but possible) or key missing
+            try:
+                mc = yf.Ticker(t).info.get('marketCap')
+                market_caps[t] = mc if mc is not None else 0
+            except Exception:
+                market_caps[t] = 0
+
     for idx, ticker in enumerate(tickers):
         if ticker in normalized_df.columns:
             series = normalized_df[ticker].round(2).tolist()
             result_data["stocks"][ticker] = {
                 "data": series,
                 "final": series[-1] if series else 0,
-                "color": colors[idx % len(colors)]
+                "color": colors[idx % len(colors)],
+                "marketCap": market_caps.get(ticker, 0)
             }
             
     return result_data
