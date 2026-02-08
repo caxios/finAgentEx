@@ -1,3 +1,4 @@
+```python
 """
 News data fetching and caching for Stock Dashboard
 """
@@ -140,3 +141,5 @@ def filter_news_by_date(news_list: List[dict], date: str) -> List[dict]:
     if not date or date == 'all':
         return news_list
     return [news for news in news_list if news.get('pubDate') == date]
+
+```
